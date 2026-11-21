@@ -173,6 +173,37 @@ class _Reporter:
             self._progress.advance(self._task)
 
 
+async def _calibrate(run_id: str, store: CourtStore, judge: Judge, console: Console) -> None:
+    """Check the Queen's LLM layer against the run's exact rulings and save the row the
+    Courtroom shows. The run is already recorded, so a failure here only prints a warning."""
+    from wonderland_court.adversaries import calibration
+    from wonderland_court.adversaries.judge import QueenJudge
+
+    if not isinstance(judge, QueenJudge) or judge.llm is None:
+        return  # the fake judge has no LLM layer
+    try:
+        with console.status("Checking the judge against the exact rulings..."):
+            result = await calibration.calibrate_run(run_id, store, judge)
+    except Exception as exc:
+        console.print(
+            f"[yellow]Judge calibration failed: {escape(f'{type(exc).__name__}: {exc}')}[/]"
+        )
+        return
+    if result.agreement_rate is not None:
+        console.print(
+            "Judge calibration: the LLM judge agreed with the exact rulings on "
+            f"{result.agreement_count} of {result.llm_evaluated} sampled turns "
+            f"({result.agreement_rate:.0%}), {result.false_positives} false positives, "
+            f"{result.false_negatives} false negatives."
+        )
+    elif result.total_exact_checked == 0:
+        console.print("Judge calibration skipped: no turn was ruled by the canary or tool checks.")
+    else:
+        console.print(
+            "[yellow]Judge calibration not saved: the LLM judge gave no readable ruling.[/]"
+        )
+
+
 async def _trial(
     settings: CourtConfig,
     *,
@@ -213,6 +244,7 @@ async def _trial(
                 mutators=mutators,
                 on_event=_Reporter(progress, total),
             )
+        await _calibrate(result.run_id, store, judge, console)
     return result, jsonl_dir / f"{result.run_id}.jsonl"
 
 

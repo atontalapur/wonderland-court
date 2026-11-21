@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import random
+import sqlite3
 import time
 from dataclasses import asdict
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
+from typer.testing import CliRunner, Result
 
+from wonderland_court import cli, registry
+from wonderland_court.adversaries import calibration
 from wonderland_court.adversaries.calibration import (
     CalibrationResult,
     calibrate,
@@ -38,6 +44,7 @@ from wonderland_court.contracts.models import (
 )
 from wonderland_court.courtroom.db_reader import CourtReadDB
 from wonderland_court.courtroom.reports import load_report_bundle
+from wonderland_court.engine.mock import MockTarget
 from wonderland_court.engine.store import CourtStore, JudgeCalibration
 
 from .fakes import FakeLLMClient, make_stakes
@@ -276,6 +283,70 @@ def test_calibrate_run_rejects_a_run_with_no_matches(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="no-such-run"):
         asyncio.run(go())
+
+
+# Calibration at the end of `court trial`
+
+
+def _real_trial(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, llm: FakeLLMClient) -> Result:
+    """`court trial` on its non-mock path, with the mock Alice and a Queen on a fake LLM."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "court.yaml").write_text(
+        "target: ollama:llama3.1\ndefenses: [plain]\nscenarios: [vault]\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(cli, "build_target", lambda spec, client: MockTarget())
+    monkeypatch.setattr(registry, "load_attacker", lambda c, client: registry.ScriptedAttacker())
+    monkeypatch.setattr(registry, "load_judge", lambda c, client: QueenJudge(llm=llm))
+    return CliRunner().invoke(cli.app, ["trial"], env={"COLUMNS": "200", "NO_COLOR": "1"})
+
+
+def _court_db(path: Path) -> tuple[list[tuple[str, str]], list[tuple[str, int, int]]]:
+    with contextlib.closing(sqlite3.connect(path)) as db:
+        runs = db.execute("SELECT run_id, status FROM runs").fetchall()
+        rows = db.execute(
+            "SELECT run_id, llm_evaluated, agreement_count FROM judge_calibration"
+        ).fetchall()
+    return runs, rows
+
+
+def test_court_trial_ends_by_calibrating_the_queen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    llm = FakeLLMClient(default=_llm_says(Ruling.HELD))
+    result = _real_trial(monkeypatch, tmp_path, llm)
+    assert result.exit_code == 0, result.output
+    assert "Judge calibration: the LLM judge agreed with the exact rulings on" in result.output
+    [(run_id, status)], rows = _court_db(tmp_path / ".court" / "court.db")
+    assert status == "finished"
+    [(calibrated_run, evaluated, _)] = rows
+    assert calibrated_run == run_id and evaluated > 0
+    assert llm.calls
+
+
+def test_a_calibration_error_leaves_the_trial_recorded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    async def unreachable(*args: object, **kwargs: object) -> NoReturn:
+        raise ConnectionError("Ollama went away")
+
+    monkeypatch.setattr(calibration, "calibrate_run", unreachable)
+    result = _real_trial(monkeypatch, tmp_path, FakeLLMClient())
+    assert result.exit_code == 0, result.output
+    assert "Judge calibration failed: ConnectionError: Ollama went away" in result.output
+    assert "Traceback" not in result.output
+    runs, rows = _court_db(tmp_path / ".court" / "court.db")
+    assert [status for _, status in runs] == ["finished"] and rows == []
+
+
+def test_a_mock_trial_has_no_llm_judge_to_calibrate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    db = tmp_path / "court.db"
+    result = CliRunner().invoke(cli.app, ["trial", "--quick", "--mock", "--db", str(db)])
+    assert result.exit_code == 0, result.output
+    assert "Judge calibration" not in result.output
+    assert _court_db(db)[1] == []
 
 
 # Evolution
