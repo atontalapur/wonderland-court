@@ -31,6 +31,7 @@ from .dodo import (
     evaluate_all,
 )
 from .drink_me import (
+    ChainedPoison,
     DrinkMeGenerator,
     HidingStyle,
 )
@@ -45,7 +46,7 @@ from .mutators import (
     MUTATOR_REGISTRY,
     WRAPPING_MUTATORS,
 )
-from .raven import RavenFuzzer
+from .raven import COMBO_CHAINS, RavenFuzzer
 from .run_view import (
     MatchRecord,
     load_matches,
@@ -66,6 +67,7 @@ from .tactics import (
 )
 
 __all__ = [
+    "COMBO_CHAINS",
     "DEFAULT_MUTATORS",
     "DEFAULT_TECHNIQUE_FAMILIES",
     "DEMO_TECHNIQUE_FAMILIES",
@@ -77,6 +79,7 @@ __all__ = [
     "WRAPPING_MUTATORS",
     "ArmStats",
     "CalibrationResult",
+    "ChainedPoison",
     "CheshireCat",
     "DodoEvaluator",
     "DodoResult",

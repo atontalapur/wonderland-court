@@ -17,6 +17,21 @@ from wonderland_court.adversaries.ports import Mutator
 from wonderland_court.adversaries.tactics import resolve_mutators
 from wonderland_court.contracts.models import MutatorId, Turn
 
+COMBO_CHAINS: tuple[tuple[MutatorId, MutatorId], ...] = (
+    (MutatorId.HOMOGLYPHS, MutatorId.BASE64),
+    (MutatorId.JUNK_TOKENS, MutatorId.CAESAR),
+    (MutatorId.MIXED_LANGUAGE, MutatorId.RIDDLE),
+    (MutatorId.SPACED_LETTERS, MutatorId.LOW_RESOURCE_LANGUAGE),
+)
+"""Curated two-step pipelines: a surface mutator, then a wrapping one, always in that order.
+
+They stand in for issue #33's chains (zero-width -> markdown smuggling, payload split -> JSON
+wrapper, mixed language -> riddle, leetspeak -> whitespace stego), mapped onto the eight
+contract mutators. The Hatter escalates to them once single mutators get blocked."""
+
+COMBO_BLOCKERS: frozenset[str] = frozenset({"input_filter", "guard"})
+"""Defenses whose blocks on a single mutator trigger the combo escalation."""
+
 
 class RavenFuzzer:
     """Why is a raven like a writing desk? Both get scrambled by the Hatter."""
@@ -52,6 +67,51 @@ class RavenFuzzer:
         for mutator_id in chain:
             text = self.registry[mutator_id](text, rng)
         return [m.value for m in chain], text
+
+    def mutate_combo(
+        self, payload: str, *, seed: int, combo: tuple[MutatorId, MutatorId]
+    ) -> tuple[list[str], str]:
+        """Apply one combo chain in its fixed order. Raises ValueError for an unknown combo."""
+        if combo not in COMBO_CHAINS:
+            raise ValueError(f"Not a curated combo: {' -> '.join(m.value for m in combo)}")
+        rng = random.Random(seed)
+        text = payload
+        for mutator_id in combo:
+            text = self.registry[mutator_id](text, rng)
+        return [m.value for m in combo], text
+
+    def combo_after_blocks(
+        self, history: list[Turn], *, mutators: list[str] | None = None
+    ) -> tuple[MutatorId, MutatorId] | None:
+        """The combo to escalate to, or None when no single mutator has been blocked.
+
+        Escalation starts once a turn that used exactly one mutator was blocked by
+        `input_filter` or `guard`. Combos that build on a blocked mutator come first (it
+        gets a second layer of cover), then the rest, in `COMBO_CHAINS` order. Both steps of
+        a combo must be in the match's allowed pool, and a combo already tried and blocked
+        is skipped.
+        """
+        blocked_singles = {
+            turn.attack.mutators[0]
+            for turn in history
+            if turn.reply.blocked_by in COMBO_BLOCKERS and len(turn.attack.mutators) == 1
+        }
+        if not blocked_singles:
+            return None
+        allowed = {
+            MutatorId(m).value for m in resolve_mutators(cast("list[MutatorId]", mutators))
+        } & {m.value for m in self.registry}
+        tried = {
+            tuple(turn.attack.mutators) for turn in history if turn.reply.blocked_by is not None
+        }
+        usable = [
+            combo
+            for combo in COMBO_CHAINS
+            if {m.value for m in combo} <= allowed and tuple(m.value for m in combo) not in tried
+        ]
+        building = [c for c in usable if c[0].value in blocked_singles]
+        ranked = building + [c for c in usable if c not in building]
+        return ranked[0] if ranked else None
 
     def evolve_from_history(
         self, history: list[Turn], *, seed: int, mutators: list[str] | None = None
