@@ -19,7 +19,7 @@ import httpx
 import pytest
 import respx
 
-from wonderland_court.config import HttpTargetConfig
+from wonderland_court.config import HttpTargetConfig, PythonTargetConfig
 from wonderland_court.contracts import (
     Document,
     Message,
@@ -36,6 +36,7 @@ from wonderland_court.engine.agent_targets import (
     PythonAgentTarget,
 )
 from wonderland_court.engine.scenarios import TEA_SHOP_TOOLS
+from wonderland_court.engine.targets import ModelTarget, build_target
 from wonderland_court.llm import Limits
 
 CANARY = "WC-3f9a0c1e"
@@ -559,3 +560,50 @@ async def test_local_agents_get_at_most_two_requests_at_once() -> None:
 def test_an_http_agent_is_a_target() -> None:
     target: Target = http_target()
     assert (target.kind, target.name) == (TargetKind.AGENT, REMOTE_URL)
+
+
+# build_target
+
+
+def test_build_target_sends_python_specs_to_the_python_adapter(agent_module: AgentModule) -> None:
+    entry, _ = agent_module("def respond(message):\n    return ''\n")
+    for spec in (f"python:{entry}", PythonTargetConfig(kind="python", entrypoint=entry)):
+        target = build_target(spec)
+        assert isinstance(target, PythonAgentTarget)
+        assert (target.kind, target.name) == (TargetKind.AGENT, f"python:{entry}")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_build_target_sends_a_url_to_the_http_adapter_with_the_default_template() -> None:
+    route = respx.post(REMOTE_URL).respond(json=REPLY)
+    target = build_target(f"  {REMOTE_URL} ")
+    assert isinstance(target, HttpAgentTarget)
+    assert (target.kind, target.name) == (TargetKind.AGENT, REMOTE_URL)
+    await target.respond(request())
+    assert sent_json(route)["message"] == "Refund order 1187, please."
+
+
+def test_build_target_takes_an_http_config_block() -> None:
+    config = HttpTargetConfig(kind="http", url=LOCAL_URL, response_path="answer")
+    target = build_target(config)
+    assert isinstance(target, HttpAgentTarget)
+    assert target.name == LOCAL_URL
+
+
+@pytest.mark.parametrize(
+    ("spec", "error"),
+    [
+        ("http:localhost:8000/chat", "http://localhost:8000/chat"),
+        ("python:", "module.path:callable"),
+    ],
+)
+def test_build_target_explains_bad_agent_specs(spec: str, error: str) -> None:
+    with pytest.raises(ValueError, match=error):
+        build_target(spec)
+
+
+def test_build_target_still_builds_model_targets() -> None:
+    target = build_target("ollama:llama3.1")
+    assert isinstance(target, ModelTarget)
+    assert target.kind == TargetKind.MODEL
