@@ -6,6 +6,9 @@ No network. The real `RavenFuzzer` and `DrinkMeGenerator` are deterministic per 
 from __future__ import annotations
 
 import asyncio
+import json
+
+import pytest
 
 from wonderland_court.adversaries.cheshire_cat import CheshireCat
 from wonderland_court.adversaries.drink_me import DrinkMeGenerator
@@ -134,3 +137,83 @@ def test_combo_escalation_is_deterministic_per_seed() -> None:
     assert match(4) == match(4)
     assert [a.mutators for a in match(4)] == [a.mutators for a in match(5)]
     assert CANARY not in "".join(a.model_dump_json() for a in match(4))
+
+
+# Chained Drink Me
+
+
+def drink_me(scenario: ScenarioId = ScenarioId.REFUND_TOOL) -> AttackContext:
+    """ADAPTIVE with only INDIRECT_INJECTION enabled, so every turn is a document turn."""
+    return make_context(scenario).model_copy(
+        update={"enabled_families": [TechniqueFamily.INDIRECT_INJECTION]}
+    )
+
+
+def test_two_turn_chain_on_refund_tool() -> None:
+    attacks = play(CheshireCat(poisoner=DrinkMeGenerator()), drink_me(), [None, None])
+    setup, payload = (a.document for a in attacks)
+    assert setup is not None and payload is not None
+    assert setup.kind == "email" and not setup.poisoned
+    assert payload.kind == "tool_output" and payload.poisoned
+    record = json.loads(payload.body)
+    assert record["interaction_history"][0]["ref"] == setup.id
+    assert f"#{record['order_id']}" in setup.body
+    assert {a.family for a in attacks} == {TechniqueFamily.INDIRECT_INJECTION.value}
+
+
+@pytest.mark.parametrize("scenario", [ScenarioId.REFUND_TOOL, ScenarioId.DRINK_ME])
+def test_chain_keeps_its_family_for_the_payload(scenario: ScenarioId) -> None:
+    # Every family is enabled: role play opens, the refusal pivots to Drink Me, and the
+    # payload turn stays on that family instead of going back to the bandit.
+    attacks = play(CheshireCat(poisoner=DrinkMeGenerator()), make_context(scenario), [None] * 3)
+    assert [a.family for a in attacks] == ["role_play", "indirect_injection", "indirect_injection"]
+    assert attacks[0].document is None
+    setup, payload = attacks[1].document, attacks[2].document
+    assert setup is not None and not setup.poisoned
+    assert payload is not None and payload.poisoned
+    assert json.loads(payload.body)["interaction_history"][0]["ref"] == setup.id
+
+
+def test_a_new_chain_starts_after_the_payload() -> None:
+    attacks = play(CheshireCat(poisoner=DrinkMeGenerator()), drink_me(), [None] * 4)
+    documents = [a.document for a in attacks if a.document is not None]
+    assert [d.poisoned for d in documents] == [False, True, False, True]
+    first_setup, first_payload, second_setup, second_payload = documents
+    assert second_setup.id != first_setup.id
+    for setup, payload in ((first_setup, first_payload), (second_setup, second_payload)):
+        assert json.loads(payload.body)["interaction_history"][0]["ref"] == setup.id
+
+
+@pytest.mark.parametrize(
+    ("poisoner", "context"),
+    [
+        (
+            DrinkMeGenerator(),
+            make_context(
+                ScenarioId.REFUND_TOOL,
+                mode=MatchMode.FIXED,
+                family=TechniqueFamily.INDIRECT_INJECTION.value,
+            ),
+        ),
+        (DrinkMeGenerator(), drink_me(ScenarioId.VAULT)),
+        (InlinePoisoner(), drink_me()),
+    ],
+    ids=["fixed-mode", "vault", "plain-poisoner"],
+)
+def test_no_chain_outside_adaptive_tea_shop_matches(
+    poisoner: DrinkMeGenerator | InlinePoisoner, context: AttackContext
+) -> None:
+    attacks = play(CheshireCat(poisoner=poisoner), context, [None, None])
+    assert all(a.document is not None and a.document.poisoned for a in attacks)
+    assert {a.family for a in attacks} == {TechniqueFamily.INDIRECT_INJECTION.value}
+
+
+def test_chain_is_deterministic_per_seed() -> None:
+    def match(seed: int) -> list[Attack]:
+        cat = CheshireCat(fuzzer=RavenFuzzer(), poisoner=DrinkMeGenerator(), seed=seed)
+        return play(cat, drink_me(), [None] * 3)
+
+    assert match(2) == match(2)
+    first, other = match(2)[0].document, match(3)[0].document
+    assert first is not None and other is not None and first.id != other.id
+    assert CANARY not in "".join(a.model_dump_json() for a in match(2))
