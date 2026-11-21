@@ -6,6 +6,7 @@ import asyncio
 import json
 import random
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ import pytest
 from wonderland_court.adversaries.calibration import (
     CalibrationResult,
     calibrate,
+    calibrate_run,
     exact_turns,
     sample_exact_turns,
 )
@@ -20,6 +22,7 @@ from wonderland_court.adversaries.evolution import PayloadEvolver, crossover, is
 from wonderland_court.adversaries.judge import QueenJudge
 from wonderland_court.adversaries.raven import RavenFuzzer
 from wonderland_court.adversaries.run_view import MatchRecord, load_matches
+from wonderland_court.contracts.events import read_events
 from wonderland_court.contracts.models import (
     Attack,
     JudgeLayer,
@@ -33,10 +36,14 @@ from wonderland_court.contracts.models import (
     Turn,
     Verdict,
 )
+from wonderland_court.courtroom.db_reader import CourtReadDB
+from wonderland_court.courtroom.reports import load_report_bundle
+from wonderland_court.engine.store import CourtStore, JudgeCalibration
 
 from .fakes import FakeLLMClient, make_stakes
 
 FAKE_RUN = Path(__file__).resolve().parents[2] / "fixtures" / "fake_run.jsonl"
+FAKE_RUN_ID = "fake-run-0001"
 
 TABLE_COLUMNS = [
     "run_id",
@@ -201,6 +208,74 @@ def test_thirty_sample_calibration_is_fast() -> None:
     assert result.llm_evaluated == 30
     assert result.false_positives == 15
     assert elapsed < 30
+
+
+# Calibration through the store
+
+
+def _calibrate_stored_fake_run(
+    db_path: Path, llm: FakeLLMClient
+) -> tuple[CalibrationResult, JudgeCalibration | None]:
+    async def go() -> tuple[CalibrationResult, JudgeCalibration | None]:
+        async with CourtStore(db_path) as store:
+            for event in read_events(FAKE_RUN):
+                await store.append_event(event)
+            result = await calibrate_run(FAKE_RUN_ID, store, QueenJudge(llm=llm))
+            return result, await store.get_calibration(FAKE_RUN_ID)
+
+    return asyncio.run(go())
+
+
+def test_calibrate_run_saves_the_row_the_courtroom_reads(tmp_path: Path) -> None:
+    db_path = tmp_path / "court.db"
+    llm = FakeLLMClient(default=_llm_says(Ruling.HELD))
+    result, saved = _calibrate_stored_fake_run(db_path, llm)
+
+    # Same numbers as calibrating the JSONL file directly.
+    direct = FakeLLMClient(default=_llm_says(Ruling.HELD))
+    assert result == asyncio.run(calibrate(load_matches(FAKE_RUN), QueenJudge(llm=direct)))
+    assert result.agreement_rate is not None
+    assert saved is not None and asdict(saved) == result.to_row()
+
+    # The dashboard's reader and the report loader both see that row.
+    summary = asyncio.run(CourtReadDB(db_path).get_calibration(FAKE_RUN_ID))
+    assert summary is not None and summary.model_dump() == result.to_row()
+    assert load_report_bundle(db_path=db_path, run_id=FAKE_RUN_ID).calibration == summary
+
+
+def test_calibrate_run_saves_nothing_without_an_llm_ruling(tmp_path: Path) -> None:
+    db_path = tmp_path / "court.db"
+    llm = FakeLLMClient(default=TargetReply(content="no json here"))
+    result, saved = _calibrate_stored_fake_run(db_path, llm)
+    assert result.total_exact_checked > 0 and result.llm_evaluated == 0
+    assert result.agreement_rate is None
+    assert result.to_judge_calibration() is None
+    assert saved is None
+    # No row, so the Courtroom shows "not calibrated" rather than 0% agreement.
+    assert asyncio.run(CourtReadDB(db_path).get_calibration(FAKE_RUN_ID)) is None
+    assert load_report_bundle(db_path=db_path, run_id=FAKE_RUN_ID).calibration is None
+
+
+def test_calibrate_run_maps_every_field_onto_the_store_row() -> None:
+    result = CalibrationResult(
+        run_id="run-1",
+        total_exact_checked=12,
+        llm_evaluated=10,
+        agreement_count=8,
+        agreement_rate=0.8,
+        false_positives=1,
+        false_negatives=1,
+    )
+    assert result.to_judge_calibration() == JudgeCalibration(**result.to_row())
+
+
+def test_calibrate_run_rejects_a_run_with_no_matches(tmp_path: Path) -> None:
+    async def go() -> None:
+        async with CourtStore(tmp_path / "court.db") as store:
+            await calibrate_run("no-such-run", store, QueenJudge(llm=FakeLLMClient()))
+
+    with pytest.raises(ValueError, match="no-such-run"):
+        asyncio.run(go())
 
 
 # Evolution

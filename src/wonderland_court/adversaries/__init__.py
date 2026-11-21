@@ -11,6 +11,7 @@ from .bandit import (
 from .calibration import (
     CalibrationResult,
     calibrate,
+    calibrate_run,
 )
 from .caterpillar import (
     FailureCluster,
@@ -102,6 +103,7 @@ __all__ = [
     "WarmStart",
     "advise",
     "calibrate",
+    "calibrate_run",
     "cluster_failures",
     "compare_retrial",
     "decode_views",
