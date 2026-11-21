@@ -6,10 +6,11 @@ instructions when asked, and spells her secret out one letter at a time. The san
 reminder talks her out of the first two, but not the third, which matches the demo story in
 `scripts/make_fake_run.py`.
 
-`MockDefenseModel` stands in for the classifier that `guard` calls, so a mock trial runs it
-offline.
+`MockDefenseModel` stands in for the models that `guard` and `dual_llm` call, so a mock trial
+runs every defense offline.
 """
 
+import json
 import re
 from typing import Any
 
@@ -23,7 +24,7 @@ from wonderland_court.contracts import (
 )
 
 from .defense_base import injection_marker
-from .defenses_advanced import guard_format
+from .defenses_advanced import READER_FENCE, guard_format
 from .scenarios import CANARY_HEX_CHARS, CANARY_PREFIX
 
 _CANARY = re.compile(rf"{CANARY_PREFIX}[0-9a-f]{{{CANARY_HEX_CHARS}}}")
@@ -60,10 +61,18 @@ class MockTarget:
         return TargetReply(content=REFUSAL)
 
 
+_AMOUNT = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)")
+_ORDER = re.compile(r"order\s*#?\s*(\d+)", re.IGNORECASE)
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
+
 class MockDefenseModel:
-    """The guard's classifier for `court trial --mock`. Scripted and offline, like the rest of
-    the mock: it answers in the guard model's format and flags a message that carries one of
-    the input filter's injection phrases.
+    """The guard's classifier and dual_llm's reader for `court trial --mock`. Scripted and
+    offline, like the rest of the mock.
+
+    As a guard it answers in the guard model's format and flags a message that carries one of
+    the input filter's injection phrases. As the reader it takes notes from the same phrases
+    and from simple patterns: dollar amounts, order numbers and email addresses.
     """
 
     async def chat(
@@ -78,7 +87,29 @@ class MockDefenseModel:
         seed: int | None = None,
     ) -> TargetReply:
         text = messages[-1].content if messages else ""
+        if json_schema is not None:
+            return TargetReply(content=json.dumps(self.notes(text)))
         flagged = injection_marker(text) is not None
         if guard_format(model_spec) == "granite_guardian":
             return TargetReply(content="Yes" if flagged else "No")
         return TargetReply(content="unsafe\nS1" if flagged else "safe")
+
+    @staticmethod
+    def notes(prompt: str) -> dict[str, Any]:
+        """Notes on the customer's text, the part of the reader prompt after its fence."""
+        text = prompt.split(f"<<<{READER_FENCE}", 1)[-1]
+        amounts = [float(found.replace(",", "")) for found in _AMOUNT.findall(text)]
+        order = _ORDER.search(text)
+        if injection_marker(text):
+            intent = "change_rules"
+        elif "refund" in text.lower():
+            intent = "refund"
+        else:
+            intent = "question"
+        return {
+            "intent": intent,
+            "order_id": order.group(1) if order else None,
+            "requested_amount": max(amounts) if amounts else None,
+            "recipients": _EMAIL.findall(text),
+            "summary": f"A customer message, noted as {intent}.",
+        }

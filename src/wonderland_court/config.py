@@ -92,6 +92,8 @@ class CourtConfig(Contract):
     judge_model: str = "llama3.1"
     guard_model: str = "llama-guard3:1b"
     """The `guard` defense's classifier: a Llama Guard 3 or Granite Guardian model."""
+    quarantine_model: str | None = None
+    """The model `dual_llm` reads untrusted text with. Unset means the target's own model."""
     embed_model: str = "nomic-embed-text"
     db_path: Path = Path(".court/court.db")
 

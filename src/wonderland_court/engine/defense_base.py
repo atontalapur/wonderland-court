@@ -1,7 +1,7 @@
 """What every defense is built from.
 
 A defense factory takes one `DefensePolicy`: the deployer's tool rules and the models that
-model-backed defenses such as `guard` call. `Defended` wraps a target and keeps its name
+model-backed defenses (`guard`, `dual_llm`) call. `Defended` wraps a target and keeps its name
 and kind. The text views here are how filters read a text in every encoding an attacker might
 hide it in.
 
@@ -38,6 +38,8 @@ class DefenseModels:
 
     guard: str = DEFAULT_GUARD_MODEL
     """The guard's classifier: a Llama Guard 3 or Granite Guardian model spec."""
+    quarantine: str | None = None
+    """The model dual_llm reads untrusted text with. None means the target's own model."""
     llm: ChatClient | None = None
     """None means `llm.default_client()`, looked up on each call, so every defense shares the
     process-wide client's rate limits and cache."""

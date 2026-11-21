@@ -257,11 +257,11 @@ async def run_trial(
 ) -> TrialResult:
     """Run every planned match, `concurrency` at a time, and record the run in the store.
 
-    `defenses` defaults to the config's. The guard calls the config's `guard_model` through
-    `defense_llm`, or through the shared default client when it is None. The LLM client
-    enforces the real rate limits; the concurrency bound only keeps the event stream
-    readable. The run's status ends as `finished`, or `failed` if anything raised; the first
-    match error is re-raised as is.
+    `defenses` defaults to the config's. Model-backed defenses call the config's
+    `guard_model` and `quarantine_model` through `defense_llm`, or through the shared default
+    client when it is None. The LLM client enforces the real rate limits; the concurrency
+    bound only keeps the event stream readable. The run's status ends as `finished`, or
+    `failed` if anything raised; the first match error is re-raised as is.
     """
     defenses = list(config.defenses if defenses is None else defenses)
     specs = plan_matches(
@@ -286,7 +286,9 @@ async def run_trial(
         )
     )
     gate = asyncio.Semaphore(concurrency)
-    models = DefenseModels(guard=config.guard_model, llm=defense_llm)
+    models = DefenseModels(
+        guard=config.guard_model, quarantine=config.quarantine_model, llm=defense_llm
+    )
 
     async def play(spec: MatchSpec) -> MatchResult:
         async with gate:

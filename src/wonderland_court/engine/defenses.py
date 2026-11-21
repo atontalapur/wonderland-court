@@ -8,9 +8,9 @@ Defenses never see the match's canary. They get what a deployer would configure:
 rules, and the models that model-backed defenses call. The output filter finds secrets by
 their shape (`WC-` and hex), not by their value.
 
-The four baseline defenses live here, and `spotlighting` and `guard` live in
-`defenses_advanced`. `dual_llm` is planned (#17): naming it raises `NotBuiltError`, so
-`court trial` can skip that stack and say why.
+The four baseline defenses live here. `spotlighting`, `guard` and `dual_llm` live in
+`defenses_advanced`. `DEFENSES` lists all seven, and `parse_defenses` and `compose_defenses`
+build any `+` stack of them.
 """
 
 import re
@@ -35,7 +35,7 @@ from .defense_base import (
     last_user_message,
     views,
 )
-from .defenses_advanced import Guard, Spotlighting
+from .defenses_advanced import DualLLM, Guard, Spotlighting
 from .policy import broken_rule
 from .scenarios import CANARY_HEX_CHARS, CANARY_PREFIX
 from .targets import render_documents
@@ -48,6 +48,7 @@ __all__ = [
     "DefenseModels",
     "DefensePolicy",
     "Defended",
+    "DualLLM",
     "Guard",
     "InputFilter",
     "OutputFilter",
@@ -189,10 +190,11 @@ DEFENSES: dict[str, DefenseFactory] = {
     "output_filter": OutputFilter,
     "guard": Guard,
     "spotlighting": Spotlighting,
+    "dual_llm": DualLLM,
 }
 """Every defense by name. A factory takes the match's `DefensePolicy` and returns a `Defense`."""
 
-PLANNED: dict[str, str] = {"dual_llm": "#17"}
+PLANNED: dict[str, str] = {}
 """Defenses that are named but not built yet, mapped to their issue. Naming one in a stack
 raises `NotBuiltError`, so `court trial` can skip that stack and say why."""
 
