@@ -103,7 +103,7 @@ def serve(
     replay: Annotated[
         Path | None, typer.Option(help="Replay a recorded run file instead of a live run.")
     ] = None,
-    speed: Annotated[float, typer.Option(help="Replay speed multiplier.")] = 4.0,
+    speed: Annotated[float, typer.Option(min=0.1, help="Replay speed multiplier.")] = 4.0,
     db: Annotated[Path, typer.Option(help="Path to the SQLite WAL database for live mode.")] = Path(
         ".court/court.db"
     ),

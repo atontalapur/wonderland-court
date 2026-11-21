@@ -6,6 +6,7 @@ import json
 import sqlite3
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +24,9 @@ from .models import (
     RunSummary,
 )
 
-_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "engine" / "schema.sql"
-COURT_SCHEMA_SQL = _SCHEMA_PATH.read_text(encoding="utf-8")
+COURT_SCHEMA_SQL = (
+    resources.files("wonderland_court.engine").joinpath("schema.sql").read_text(encoding="utf-8")
+)
 
 
 async def init_court_db_schema(db_path: Path) -> None:
@@ -67,6 +69,7 @@ class CourtReadDB:
             conn = await aiosqlite.connect(uri, uri=True)
             conn.row_factory = aiosqlite.Row
             await conn.execute("PRAGMA query_only = ON;")
+            await conn.execute("PRAGMA busy_timeout = 5000;")
         except sqlite3.Error:
             if conn is not None:
                 await conn.close()
@@ -327,12 +330,12 @@ class CourtReadDB:
             return CalibrationSummary.model_validate_json(str(row["calibration_json"]))
         return CalibrationSummary(
             run_id=str(row["run_id"]),
-            total_exact_checked=int(row["total_exact_checked"]),
-            llm_evaluated=int(row["llm_evaluated"]),
-            agreement_count=int(row["agreement_count"]),
-            agreement_rate=float(row["agreement_rate"]),
-            false_positives=int(row["false_positives"]),
-            false_negatives=int(row["false_negatives"]),
+            total_exact_checked=int(row["total_exact_checked"] or 0),
+            llm_evaluated=int(row["llm_evaluated"] or 0),
+            agreement_count=int(row["agreement_count"] or 0),
+            agreement_rate=float(row["agreement_rate"] or 0.0),
+            false_positives=int(row["false_positives"] or 0),
+            false_negatives=int(row["false_negatives"] or 0),
         )
 
     async def _fetch_advice(
@@ -350,15 +353,15 @@ class CourtReadDB:
         keys = set(row.keys())
         if "advice_json" in keys and row["advice_json"] is not None:
             return RemediationAdviceView.model_validate_json(str(row["advice_json"]))
-        raw_clusters: list[dict[str, Any]] = json.loads(str(row["clusters_json"]))
+        raw_clusters: list[dict[str, Any]] = json.loads(str(row["clusters_json"] or "[]"))
         clusters = [FailureClusterView.model_validate(item) for item in raw_clusters]
         return RemediationAdviceView(
             run_id=str(row["run_id"]),
-            target_kind=str(row["target_kind"]),
+            target_kind=str(row["target_kind"] or "model"),
             clusters=clusters,
-            recommended_defense=str(row["recommended_defense"]),
-            config_patch_yaml=str(row["config_patch_yaml"]),
-            rationale=str(row["rationale"]),
+            recommended_defense=str(row["recommended_defense"] or ""),
+            config_patch_yaml=str(row["config_patch_yaml"] or ""),
+            rationale=str(row["rationale"] or ""),
         )
 
     async def _fetch_retrial_diff(
@@ -370,19 +373,31 @@ class CourtReadDB:
             """
             SELECT *
             FROM retrial_comparisons
-            WHERE retrial_run_id = ? OR baseline_run_id = ?
+            WHERE retrial_run_id = ?
             ORDER BY rowid DESC
             LIMIT 1
             """,
-            (run_id, run_id),
+            (run_id,),
         ) as cur:
             row = await cur.fetchone()
+        if row is None:
+            async with conn.execute(
+                """
+                SELECT *
+                FROM retrial_comparisons
+                WHERE baseline_run_id = ?
+                ORDER BY rowid DESC
+                LIMIT 1
+                """,
+                (run_id,),
+            ) as cur:
+                row = await cur.fetchone()
         if row is None:
             return None
         keys = set(row.keys())
         if "comparison_json" in keys and row["comparison_json"] is not None:
             return RetrialComparisonView.model_validate_json(str(row["comparison_json"]))
-        matched_seeds = [int(s) for s in json.loads(str(row["matched_seeds_json"]))]
+        matched_seeds = [int(s) for s in json.loads(str(row["matched_seeds_json"] or "[]"))]
         raw_per_scen = (
             row["per_scenario_json"]
             if "per_scenario_json" in keys
@@ -395,9 +410,9 @@ class CourtReadDB:
             baseline_run_id=str(row["baseline_run_id"]),
             retrial_run_id=str(row["retrial_run_id"]),
             matched_seeds=matched_seeds,
-            baseline_asr=float(row["baseline_asr"]),
-            retrial_asr=float(row["retrial_asr"]),
-            asr_delta=float(row["asr_delta"]),
+            baseline_asr=float(row["baseline_asr"] or 0.0),
+            retrial_asr=float(row["retrial_asr"] or 0.0),
+            asr_delta=float(row["asr_delta"] or 0.0),
             baseline_utility=float(baseline_util) if baseline_util is not None else None,
             retrial_utility=float(retrial_util) if retrial_util is not None else None,
             per_scenario_diff=per_scenario_diff,

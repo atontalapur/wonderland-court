@@ -6,6 +6,7 @@ on:
     paths:
       - "docs/benchmark-data/**"
       - "web/**"
+      - "src/wonderland_court/courtroom/static_site.py"
       - "fixtures/fake_run.jsonl"
   workflow_dispatch:
 
@@ -42,6 +43,8 @@ jobs:
           mkdir -p web/public/data
           if [ -f docs/benchmark-data/manifest.json ]; then
             cp -R docs/benchmark-data/. web/public/data/
+          elif [ -f docs/benchmark-data/data/manifest.json ]; then
+            cp -R docs/benchmark-data/data/. web/public/data/
           else
             uv run python -c "
           from pathlib import Path

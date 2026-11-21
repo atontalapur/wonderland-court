@@ -1,8 +1,10 @@
 # Wonderland Court — Local Ollama Benchmark Summary
 
-**Captured:** 2026-11-21 · **Hardware:** Apple M2 Max (32 GB RAM, macOS arm64) · **Ollama:** `0.40.17` (`http://localhost:11434/v1`)  
-**Target Model:** `ollama:qwen2.5:7b-instruct` · **Run ID:** `ollama-run-0001` (`58` events, `8` matches, seeds `101–108`)  
-**Artifacts:** [demo_run.jsonl](file:///Users/tarunvadapalli/Documents/Git/wonderland-court/docs/benchmark/demo_run.jsonl) · [report.html](file:///Users/tarunvadapalli/Documents/Git/wonderland-court/docs/benchmark/report.html) · [report.md](file:///Users/tarunvadapalli/Documents/Git/wonderland-court/docs/benchmark/report.md) · [results.sarif](file:///Users/tarunvadapalli/Documents/Git/wonderland-court/docs/benchmark/results.sarif)
+**Captured:** 2026-11-21 · **Hardware:** Apple M2 Max (32 GB RAM, macOS arm64) · **Ollama:** `0.40.17` (`http://localhost:11434/v1`)
+
+**Target Model:** `ollama:qwen2.5:7b-instruct` · **Run ID:** `ollama-run-0001` (`58` events, `8` matches, seeds `101–108`)
+
+**Artifacts:** [demo_run.jsonl](./demo_run.jsonl) · [report.html](./report.html) · [report.md](./report.md) · [results.sarif](./results.sarif)
 
 > **Scope Note:** This benchmark was executed live against local `ollama:qwen2.5:7b-instruct` via `scripts/run_local_ollama_trial.py` to verify the entire Courtroom server, React UI, Replay Mode, Dodo/Calibration/Caterpillar views, and report exporters end-to-end. The full 3-laptop multi-model sharded benchmark (`--shard 1/3`, `2/3`, `3/3` -> `court merge` across `llama3.1`, `qwen3.5:4b`, `llama-guard3:1b`) runs once Engine (`#18`) and Adversaries (`#10`–`#12`, `#21`, `#24`) PRs merge.
 
@@ -52,6 +54,9 @@
 ## 4. Replay & Inspect Locally
 
 ```bash
+# Hydrate the local SQLite WAL DB from the committed JSONL run (or omit --hydrate-from-jsonl to run live on Ollama)
+uv run python scripts/run_local_ollama_trial.py --hydrate-from-jsonl
+
 # Inspect live SQLite WAL database in the React Courtroom dashboard
 uv run court serve --db .court/local_ollama_demo.db --port 8000
 

@@ -99,7 +99,11 @@ export function App() {
 
   // Load bundle whenever selectedRunId changes
   useEffect(() => {
-    if (!selectedRunId) return;
+    if (!selectedRunId) {
+      setBundle(null);
+      return;
+    }
+    setBundle(null);
     let cancelled = false;
     async function loadBundle() {
       try {
@@ -151,11 +155,15 @@ export function App() {
 
   const activeSummary = aggregated.summary ?? bundle?.summary ?? null;
   const displayMatches = aggregated.matches;
+  const allowBundleFallback = !stream.isReplaying && stream.totalEvents === 0;
   const displayStandings =
     aggregated.standings.length > 0
       ? aggregated.standings
-      : bundle?.standings ?? [];
-  const displayHeatmap = aggregated.heatmap ?? bundle?.heatmap ?? null;
+      : allowBundleFallback
+        ? (bundle?.standings ?? [])
+        : [];
+  const displayHeatmap =
+    aggregated.heatmap ?? (allowBundleFallback ? (bundle?.heatmap ?? null) : null);
 
   const handleOpenHeatmapCell = (cell: AggregatedCellView) => {
     setDrawer({
@@ -187,12 +195,11 @@ export function App() {
       selectedRunId={selectedRunId}
       onSelectRun={(id) => {
         setSelectedMatchId(null);
+        setDrawer((d) => ({ ...d, isOpen: false }));
         setSelectedRunId(id);
       }}
       connectionMode={
-        stream.isReplaying && healthMode === "static"
-          ? "replaying"
-          : stream.connectionMode
+        stream.isReplaying ? "replaying" : stream.connectionMode
       }
       calibration={bundle?.calibration ?? null}
       activeTab={activeTab}

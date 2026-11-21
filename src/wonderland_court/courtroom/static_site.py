@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,9 +13,11 @@ from wonderland_court.contracts import dump_event, read_events
 from .models import RunBundle
 from .reports import list_db_run_ids, load_report_bundle
 
+_SAFE_RUN_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
+
 
 def _validate_safe_run_id(run_id: str) -> str:
-    if not run_id or "/" in run_id or "\\" in run_id or ".." in run_id:
+    if not run_id or run_id in {".", ".."} or not _SAFE_RUN_ID_RE.fullmatch(run_id):
         raise ValueError(f"Unsafe run_id for static export filename: {run_id!r}")
     return run_id
 

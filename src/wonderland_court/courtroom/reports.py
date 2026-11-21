@@ -127,10 +127,12 @@ _JINJA_ENV = Environment(
 
 
 def _open_readonly_sqlite(db_path: Path) -> sqlite3.Connection:
-    if not db_path.exists():
+    if not db_path.is_file():
         raise FileNotFoundError(f"SQLite database not found: {db_path}")
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only = ON;")
+    conn.execute("PRAGMA busy_timeout = 5000;")
     return conn
 
 

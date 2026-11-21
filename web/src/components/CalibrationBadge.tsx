@@ -1,5 +1,5 @@
 import { Scale } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CalibrationSummary } from "../types/events";
 
 interface CalibrationBadgeProps {
@@ -8,6 +8,30 @@ interface CalibrationBadgeProps {
 
 export function CalibrationBadge({ calibration }: CalibrationBadgeProps) {
   const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    const handleMouseDown = (event: MouseEvent) => {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(event.target as Node)
+      ) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("mousedown", handleMouseDown);
+    };
+  }, [open]);
 
   if (!calibration) {
     return (
@@ -30,7 +54,7 @@ export function CalibrationBadge({ calibration }: CalibrationBadgeProps) {
         : "border-rose-500/40 bg-rose-500/10 text-rose-300";
 
   return (
-    <div className="relative">
+    <div ref={containerRef} className="relative">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}

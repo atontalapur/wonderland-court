@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import time
-from collections import defaultdict, deque
+from collections import deque
 from collections.abc import Callable
 
 
@@ -25,8 +25,8 @@ class IPRateLimiter:
         self.max_requests_per_min = max_requests_per_min
         self.max_sse_per_ip = max_sse_per_ip
         self._clock = clock
-        self._requests: dict[str, deque[float]] = defaultdict(deque)
-        self._sse_counts: dict[str, int] = defaultdict(int)
+        self._requests: dict[str, deque[float]] = {}
+        self._sse_counts: dict[str, int] = {}
 
     def check_request(self, client_ip: str) -> tuple[bool, int]:
         """Record a request if under the 60s limit; return `(allowed, retry_after_seconds)`."""
@@ -35,15 +35,22 @@ class IPRateLimiter:
 
         now = self._clock()
         cutoff = now - 60.0
-        dq = self._requests[client_ip]
-        while dq and dq[0] <= cutoff:
-            dq.popleft()
+        dq = self._requests.get(client_ip)
+        if dq is not None:
+            while dq and dq[0] <= cutoff:
+                dq.popleft()
+            if not dq:
+                self._requests.pop(client_ip, None)
+                dq = None
 
-        if len(dq) >= self.max_requests_per_min:
+        if dq is not None and len(dq) >= self.max_requests_per_min:
             oldest = dq[0]
             retry_after = max(1, math.ceil(60.0 - (now - oldest)))
             return (False, retry_after)
 
+        if dq is None:
+            dq = deque()
+            self._requests[client_ip] = dq
         dq.append(now)
         return (True, 0)
 

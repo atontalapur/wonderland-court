@@ -1,5 +1,5 @@
 import { Check, Copy, Sparkles, Wrench } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   RemediationAdviceView,
   RetrialComparisonView,
@@ -55,13 +55,25 @@ export function CaterpillarPanel({
   onInspectMatches,
 }: CaterpillarPanelProps) {
   const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleCopyYaml = async () => {
     if (!advice) return;
     try {
       await navigator.clipboard.writeText(advice.config_patch_yaml);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1800);
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+      copyTimerRef.current = window.setTimeout(() => setCopied(false), 1800);
     } catch {
       setCopied(false);
     }

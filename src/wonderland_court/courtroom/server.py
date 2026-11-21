@@ -24,7 +24,7 @@ from .rate_limit import IPRateLimiter
 from .replay import ReplayStore
 from .sse import resolve_after_seq, stream_latest_live_events, stream_live_events
 
-DEFAULT_DB_PATH = Path(".wonderland/court.db")
+DEFAULT_DB_PATH = Path(".court/court.db")
 DEFAULT_STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 _SSE_HEADERS = {

@@ -154,8 +154,8 @@ export function RetrialDiffCard({ retrial }: RetrialDiffCardProps) {
           </h4>
           {scenarioEntries.map(([scenario, metrics]) => {
             const { before, after } = readScenarioPair(metrics);
-            const beforePct = Math.round(before * 100);
-            const afterPct = Math.round(after * 100);
+            const beforePct = Math.max(0, Math.min(100, Number((before * 100).toFixed(1))));
+            const afterPct = Math.max(0, Math.min(100, Number((after * 100).toFixed(1))));
 
             return (
               <div
@@ -167,9 +167,9 @@ export function RetrialDiffCard({ retrial }: RetrialDiffCardProps) {
                     {scenario}
                   </span>
                   <span className="text-slate-400">
-                    {beforePct}% →{" "}
+                    {beforePct.toFixed(1)}% →{" "}
                     <span className="font-bold text-emerald-400">
-                      {afterPct}%
+                      {afterPct.toFixed(1)}%
                     </span>
                   </span>
                 </div>

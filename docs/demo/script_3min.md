@@ -35,9 +35,9 @@
 4. **Failover Armed (Zero-Panic Backup):**
    - Pre-type (do not execute) the instant replay command in **Terminal C**:
      ```bash
-     court serve --replay docs/benchmark/demo_run.jsonl --speed 4.0
+     court serve --replay fixtures/fake_run.jsonl --speed 4.0
      ```
-     *(If `docs/benchmark/demo_run.jsonl` has not been generated yet, point `--replay` at `fixtures/fake_run.jsonl`.)*
+     *(Replays the exact Turn 1 `role_play` held -> Turn 2 `Drink Me` email + `spotlighting+guard+output_filter` beat below; for the recorded local `ollama:qwen2.5:7b-instruct` run, swap `--replay docs/benchmark/demo_run.jsonl`.)*
    - Keep the **60-second backup video** queued in QuickTime / VLC and `docs/demo/fallback_slide.md` exported as a single PDF/PNG slide on Desktop.
 
 ---
@@ -125,15 +125,15 @@ Trigger **immediately** (do not debug live for more than 5 seconds):
 1. **Level 1 — Slow Ollama / Model Stall (>5s hang during `court trial`):**
    - Press `Ctrl+C` in Terminal A, switch to Terminal C, and run:
      ```bash
-     court serve --replay docs/benchmark/demo_run.jsonl --speed 4.0
+     court serve --replay fixtures/fake_run.jsonl --speed 4.0
      ```
-     *(Fallback if needed: `court serve --replay fixtures/fake_run.jsonl --speed 4.0`)*
+     *(Matches the canonical Turn 1 -> Turn 2 `Drink Me` email script beats; or pass `--replay docs/benchmark/demo_run.jsonl` for the local `ollama:qwen2.5:7b-instruct` run.)*
    - Refresh `http://127.0.0.1:8000` and narrate the exact same script beats at 4x replay speed:
      > *"To keep inside three minutes, here is the recorded run streaming at 4x speed through the exact same Courtroom UI."*
 2. **Level 2 — Local Server / Browser Crash:**
    - Switch directly to the **60-second backup video** (shot list below) and narrate the key beats over it.
 3. **Level 3 — Total Machine / Projector Failure:**
-   - Put up the **single fallback slide** ([fallback_slide.md](file:///Users/tarunvadapalli/Documents/Git/wonderland-court/docs/demo/fallback_slide.md)) and deliver the `$400` refund story + retrial numbers verbally.
+   - Put up the **single fallback slide** ([fallback_slide.md](./fallback_slide.md)) and deliver the `$400` refund story + retrial numbers verbally.
 
 ---
 

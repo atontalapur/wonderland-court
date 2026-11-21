@@ -42,6 +42,8 @@ Full end-to-end CLI flow (with local dev setup via `uv`):
 
 ```bash
 uv sync --locked
+# Hydrate the SQLite WAL DB from recorded artifacts (or omit --hydrate-from-jsonl to run live on Ollama)
+uv run python scripts/run_local_ollama_trial.py --hydrate-from-jsonl
 uv run court serve --db .court/local_ollama_demo.db --port 8000
 uv run court report --format html --db .court/local_ollama_demo.db --out docs/benchmark/report.html
 ```
@@ -69,6 +71,8 @@ Measured locally on Apple M2 Max (`ollama:qwen2.5:7b-instruct`, 8 adaptive match
 
 - **Judge Calibration:** `62.5%` agreement (`5/8`, 1 FP / 2 FN) between blind LLM judge and exact Canary/Tool-Call ground truth—showing why deterministic checks run first.
 - **Seed-Locked Retrial:** Applying Caterpillar's recommended `spotlighting+output_filter` stack dropped aggregate ASR from **`75.0%` → `0.0%` (`-75.0` pp)** on identical seeds while keeping **Dodo Utility at `100.0%`**.
+
+> *Scope Note: Single-model local verification run (`n = 2` matches per defense stack on `qwen2.5:7b-instruct`); see [benchmark_summary.md](./docs/benchmark/benchmark_summary.md) for the full 3-laptop multi-model sweep plan.*
 
 ## Courtroom Architecture
 

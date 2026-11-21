@@ -156,8 +156,8 @@ export function DefenseTradeoffPlot({ standings }: DefenseTradeoffPlotProps) {
                 ? "#e11d48"
                 : "#10b981";
             const isHovered = hovered === s.defense;
-            const labelAnchor = util > 0.72 ? "end" : "start";
-            const labelDx = util > 0.72 ? -10 : 10;
+            const labelAnchor = util > 0.52 ? "end" : "start";
+            const labelDx = util > 0.52 ? -10 : 10;
             const labelDy =
               cy > PAD_T + PLOT_H * 0.55
                 ? 3 - overlapIdx * 13
@@ -170,6 +170,9 @@ export function DefenseTradeoffPlot({ standings }: DefenseTradeoffPlotProps) {
                 onMouseEnter={() => setHovered(s.defense)}
                 onMouseLeave={() => setHovered(null)}
               >
+                <title>
+                  {`${s.defense}: Security ${Math.round(security * 100)}%, Utility ${Math.round(util * 100)}%, Elo ${s.elo.toFixed(1)}`}
+                </title>
                 {isTop && (
                   <circle
                     cx={cx}

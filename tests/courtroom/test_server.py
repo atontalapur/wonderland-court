@@ -187,7 +187,7 @@ async def _seed_wave2_tables(db_path: Path, run_id: str) -> None:
                 -0.375,
                 0.96,
                 0.95,
-                json.dumps({"refund_tool": {"baseline": 0.25, "retrial": 0.0}}),
+                json.dumps({"refund_tool": {"baseline_asr": 0.25, "retrial_asr": 0.0}}),
             ),
         )
         await conn.commit()
@@ -458,3 +458,137 @@ async def test_sse_concurrent_ip_limit_and_recovery(tmp_path: Path) -> None:
             for it in (it2, it3):
                 if (aclose := getattr(it, "aclose", None)) is not None:
                     await aclose()
+
+
+@pytest.mark.asyncio
+async def test_spa_fallback_blocks_path_traversal(tmp_path: Path) -> None:
+    static_dir = tmp_path / "static"
+    static_dir.mkdir(parents=True)
+    (static_dir / "index.html").write_text("<html><body>INDEX_SAFE</body></html>", encoding="utf-8")
+    (tmp_path / "secret.txt").write_text("TOP_SECRET_DO_NOT_LEAK", encoding="utf-8")
+
+    app = create_app(db_path=tmp_path / "missing.db", static_dir=static_dir)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        for attack_path in ("/../secret.txt", "/../../pyproject.toml", "/%2e%2e/secret.txt"):
+            res = await client.get(attack_path)
+            assert res.status_code == 200
+            assert "TOP_SECRET_DO_NOT_LEAK" not in res.text
+            assert "INDEX_SAFE" in res.text
+
+
+@pytest.mark.asyncio
+async def test_nullable_wave2_columns_do_not_500(tmp_path: Path) -> None:
+    db_path = tmp_path / "nullable_wave2.db"
+    await init_court_db_schema(db_path)
+    events = list(read_events(FAKE_RUN))
+    await _seed_run_events(db_path, events)
+
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.execute("INSERT INTO judge_calibration (run_id) VALUES (?)", ("fake-run-0001",))
+        await conn.execute("INSERT INTO remediation_advice (run_id) VALUES (?)", ("fake-run-0001",))
+        await conn.execute(
+            "INSERT INTO retrial_comparisons (retrial_run_id, baseline_run_id) VALUES (?, ?)",
+            ("retrial-null-0002", "fake-run-0001"),
+        )
+        await conn.commit()
+
+    app = create_app(db_path=db_path, static_dir=tmp_path / "no_static")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        for ep in ("bundle", "calibration", "advice", "retrial-diff"):
+            resp = await client.get(f"/api/runs/fake-run-0001/{ep}")
+            assert resp.status_code == 200, f"{ep} failed: {resp.text}"
+
+
+@pytest.mark.asyncio
+async def test_engine_court_store_interop_with_server_and_reports(tmp_path: Path) -> None:
+    from wonderland_court.contracts import MatchMode, TargetKind
+    from wonderland_court.courtroom.reports import write_report
+    from wonderland_court.engine.store import (
+        CourtStore,
+        JudgeCalibration,
+        RemediationAdvice,
+        RetrialComparison,
+        RunRecord,
+    )
+
+    db_path = tmp_path / "engine_interop.db"
+    events = list(read_events(FAKE_RUN))
+    run_started = events[0]
+    assert isinstance(run_started, RunStarted)
+
+    async with CourtStore(db_path) as store:
+        await store.create_run(
+            RunRecord(
+                run_id=run_started.run_id,
+                mode=MatchMode(run_started.mode),
+                target=run_started.targets[0],
+                target_kind=TargetKind.MODEL,
+                config={"defenses": run_started.defenses},
+                status="completed",
+            )
+        )
+        for ev in events:
+            await store.append_event(ev)
+        await store.save_judge_calibration(
+            JudgeCalibration(
+                run_id=run_started.run_id,
+                total_exact_checked=8,
+                llm_evaluated=5,
+                agreement_count=5,
+                agreement_rate=1.0,
+                false_positives=0,
+                false_negatives=0,
+            )
+        )
+        await store.save_remediation_advice(
+            RemediationAdvice(
+                run_id=run_started.run_id,
+                target_kind=TargetKind.MODEL,
+                clusters=[
+                    {
+                        "cluster_id": "c1",
+                        "family_label": "Indirect Injection",
+                        "technique_family": "indirect_injection",
+                        "scenario": "refund_tool",
+                        "count": 1,
+                        "example_match_ids": ["m01"],
+                        "root_cause_summary": "Poisoned customer email.",
+                    }
+                ],
+                recommended_defense="spotlighting+guard+output_filter",
+                config_patch_yaml="defense: spotlighting+guard+output_filter\n",
+                rationale="Stops email override.",
+            )
+        )
+        await store.save_retrial_comparison(
+            RetrialComparison(
+                retrial_run_id="retrial-0002",
+                baseline_run_id=run_started.run_id,
+                matched_seeds=[101, 102],
+                baseline_asr=0.5,
+                retrial_asr=0.0,
+                asr_delta=-0.5,
+                baseline_utility=0.95,
+                retrial_utility=0.95,
+                per_scenario={"refund_tool": {"baseline_asr": 0.5, "retrial_asr": 0.0}},
+            )
+        )
+
+    app = create_app(db_path=db_path, static_dir=tmp_path / "no_static")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        res = await client.get(f"/api/runs/{run_started.run_id}/bundle")
+        assert res.status_code == 200
+        payload = res.json()
+        assert payload["summary"]["run_id"] == run_started.run_id
+        assert payload["calibration"]["agreement_count"] == 5
+        assert payload["advice"]["recommended_defense"] == "spotlighting+guard+output_filter"
+        assert payload["retrial"]["per_scenario_diff"]["refund_tool"]["baseline_asr"] == 0.5
+
+    html_doc = write_report(fmt="html", db_path=db_path, run_id=run_started.run_id)
+    assert run_started.run_id in html_doc
+    sarif_doc = json.loads(write_report(fmt="sarif", db_path=db_path, run_id=run_started.run_id))
+    assert sarif_doc["version"] == "2.1.0"
+    assert sarif_doc["runs"][0]["results"]

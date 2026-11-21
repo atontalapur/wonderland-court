@@ -1,6 +1,6 @@
 # Wonderland Court — CutieHack Devpost Submission Copy
 
-> Copy-paste sections below into the CutieHack Devpost form after filling any `[FILL_FROM_BENCHMARK]` slots from your final Ollama benchmark run.
+> Copy-paste sections below into the CutieHack Devpost form (metrics below are verified from local `ollama:qwen2.5:7b-instruct` run `ollama-run-0001`; update before submission if superseded by the final 3-laptop sweep).
 
 ---
 
@@ -65,7 +65,7 @@ Point `court` at an Ollama model, a remote API (`openai:`, `anthropic:`, or any 
 - Built a complete **12-hour, 3-developer** end-to-end tool that installs with one `pipx` command and runs completely offline on Ollama with zero API spend.
 - Closed the loop from **attack -> deterministic + calibrated verdict -> failure clustering -> hardened config -> verified same-seed retrial** alongside Dodo helpfulness scoring.
 - Wired real developer workflow integration: live SSE Courtroom dashboard, replay mode, `court ci`, and GitHub Code Scanning **SARIF** output.
-- *(Add final captured numbers here after benchmark run: `[FILL_BENCHMARK_HIGHLIGHT]`)*
+- Captured verified local benchmarks on `ollama:qwen2.5:7b-instruct` (`ollama-run-0001`): `spotlighting+output_filter` achieved `0.0%` ASR and `100.0%` Dodo utility vs. `100.0%` ASR on `plain`, `sandwich`, and `spotlighting`; same-seed retrial cut aggregate ASR from `75.0%` to `0.0%` (`-75.0` pp); and blind LLM Judge Calibration measured `62.5%` agreement (`5/8` turns).
 
 ---
 

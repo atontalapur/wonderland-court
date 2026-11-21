@@ -1,20 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import App from "../App";
 import { parseJsonlEvents } from "../api/staticLoader";
+import { useCourtStream, type UseCourtStreamOptions } from "../api/sse";
+import { CalibrationBadge } from "../components/CalibrationBadge";
 import { CaterpillarPanel } from "../components/CaterpillarPanel";
 import { CourtroomFeed } from "../components/CourtroomFeed";
 import { LeaderboardTable } from "../components/LeaderboardTable";
 import { ReplayControls } from "../components/ReplayControls";
 import { TechniqueHeatmap } from "../components/TechniqueHeatmap";
 import { TranscriptDrawer } from "../components/TranscriptDrawer";
+import { TurnCard } from "../components/TurnCard";
 import { aggregateEvents } from "../state/streamAggregator";
 import type {
   CourtEvent,
   RemediationAdviceView,
   RetrialComparisonView,
+  RunBundle,
 } from "../types/events";
 
 const FIXTURE_PATH = path.resolve(
@@ -277,5 +282,311 @@ describe("Courtroom Dashboard with real fixtures/fake_run.jsonl", () => {
     // Clicking example match ID opens TranscriptDrawer
     fireEvent.click(screen.getByRole("button", { name: /m01/ }));
     expect(screen.getByTestId("transcript-drawer")).toBeInTheDocument();
+  });
+
+  it("computes fallback standings from match_ended events when no standings event is present", () => {
+    const withoutStandings = FAKE_EVENTS.filter((e) => e.type !== "standings");
+    const state = aggregateEvents(withoutStandings);
+    expect(state.standings.length).toBeGreaterThan(0);
+    expect(state.standings[0].elo).toBeGreaterThanOrEqual(
+      state.standings[state.standings.length - 1].elo
+    );
+  });
+
+  it("renders untrusted HTML/script payloads safely without executing or injecting DOM tags", () => {
+    const xssPayload =
+      '<script>window.__xss=1</script><img src=x onerror="alert(1)">';
+    const baseState = aggregateEvents(FAKE_EVENTS);
+    const sampleSlot = baseState.matches[0].liveTurns[0];
+    const poisonedSlot = {
+      ...sampleSlot,
+      attack: sampleSlot.attack
+        ? {
+            ...sampleSlot.attack,
+            prompt: xssPayload,
+            documents: [
+              {
+                doc_id: "doc-xss",
+                kind: "email",
+                source: "attacker@example.com",
+                subject: xssPayload,
+                content: `<!-- ${xssPayload} --> Hello`,
+                poisoned: true,
+              },
+            ],
+          }
+        : undefined,
+      reply: sampleSlot.reply
+        ? { ...sampleSlot.reply, content: xssPayload }
+        : undefined,
+      verdict: sampleSlot.verdict
+        ? { ...sampleSlot.verdict, reason: xssPayload }
+        : undefined,
+    };
+
+    const { container } = render(<TurnCard slot={poisonedSlot} />);
+    expect(container.querySelectorAll("script")).toHaveLength(0);
+    expect(container.querySelectorAll("img")).toHaveLength(0);
+    expect(container.textContent).toContain("<script>window.__xss=1</script>");
+  });
+
+  it("dismisses CalibrationBadge popover on Escape key and outside click", () => {
+    render(
+      <div>
+        <span data-testid="outside-target">outside</span>
+        <CalibrationBadge
+          calibration={{
+            run_id: "run-1",
+            total_exact_checked: 13,
+            llm_evaluated: 8,
+            agreement_count: 5,
+            agreement_rate: 0.625,
+            false_positives: 1,
+            false_negatives: 2,
+          }}
+        />
+      </div>
+    );
+
+    const btn = screen.getByRole("button", { name: /Judge Calibration: 63% \(5\/8\)/ });
+    fireEvent.click(btn);
+    expect(screen.getByText("Queen Judge Calibration")).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByText("Queen Judge Calibration")).not.toBeInTheDocument();
+
+    fireEvent.click(btn);
+    expect(screen.getByText("Queen Judge Calibration")).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByTestId("outside-target"));
+    expect(screen.queryByText("Queen Judge Calibration")).not.toBeInTheDocument();
+  });
+});
+
+class MockEventSource {
+  static instances: MockEventSource[] = [];
+  url: string;
+  closed = false;
+  onopen: (() => void) | null = null;
+  onmessage: ((ev: MessageEvent<string>) => void) | null = null;
+  onerror: (() => void) | null = null;
+  private listeners = new Map<string, Array<(ev: MessageEvent<string>) => void>>();
+
+  constructor(url: string) {
+    this.url = url;
+    MockEventSource.instances.push(this);
+  }
+
+  addEventListener(
+    type: string,
+    handler: (ev: MessageEvent<string>) => void
+  ): void {
+    const existing = this.listeners.get(type) ?? [];
+    existing.push(handler);
+    this.listeners.set(type, existing);
+  }
+
+  emit(type: string, payload: unknown): void {
+    const ev = { data: JSON.stringify(payload) } as MessageEvent<string>;
+    for (const fn of this.listeners.get(type) ?? []) {
+      fn(ev);
+    }
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+}
+
+function StreamHarness({
+  options,
+}: {
+  options: UseCourtStreamOptions;
+}) {
+  const stream = useCourtStream(options);
+  return (
+    <div>
+      <div data-testid="event-count">{stream.events.length}</div>
+      <div data-testid="visible-count">{stream.visibleEvents.length}</div>
+      <div data-testid="cursor">{stream.cursor}</div>
+      <div data-testid="is-replaying">{String(stream.isReplaying)}</div>
+      <button type="button" onClick={stream.startLocalReplay}>
+        StartReplay
+      </button>
+      <button type="button" onClick={stream.pause}>
+        Pause
+      </button>
+      <button type="button" onClick={() => stream.setSpeed(4)}>
+        Speed4
+      </button>
+    </div>
+  );
+}
+
+describe("useCourtStream & App lifecycle guarantees", () => {
+  afterEach(() => {
+    MockEventSource.instances = [];
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("merges late initialEvents without dropping SSE events or reconnecting live EventSource on replay toggles", () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    const ev0 = FAKE_EVENTS[0];
+    const ev1 = FAKE_EVENTS[1];
+    const ev2 = FAKE_EVENTS[2];
+
+    const { rerender, unmount } = render(
+      <StreamHarness
+        options={{
+          runId: ev0.run_id,
+          mode: "live",
+          initialEvents: [],
+        }}
+      />
+    );
+
+    expect(MockEventSource.instances).toHaveLength(1);
+    const es = MockEventSource.instances[0];
+
+    act(() => {
+      es.emit(ev2.type, ev2);
+    });
+    expect(screen.getByTestId("event-count")).toHaveTextContent("1");
+
+    // Bundle resolves after SSE already delivered ev2
+    rerender(
+      <StreamHarness
+        options={{
+          runId: ev0.run_id,
+          mode: "live",
+          initialEvents: [ev0, ev1],
+        }}
+      />
+    );
+
+    // Should merge all 3 events sorted by seq and deduplicated, without opening a new EventSource
+    expect(screen.getByTestId("event-count")).toHaveTextContent("3");
+    expect(MockEventSource.instances).toHaveLength(1);
+    expect(es.closed).toBe(false);
+
+    // Speed change or local replay toggle in live mode must not reconnect SSE
+    fireEvent.click(screen.getByRole("button", { name: "Speed4" }));
+    fireEvent.click(screen.getByRole("button", { name: "StartReplay" }));
+    expect(MockEventSource.instances).toHaveLength(1);
+    expect(es.closed).toBe(false);
+
+    unmount();
+    expect(es.closed).toBe(true);
+  });
+
+  it("pauses server-replay mode at the current streamed event count instead of resetting to 0", () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    const ev0 = FAKE_EVENTS[0];
+    const ev1 = FAKE_EVENTS[1];
+
+    render(
+      <StreamHarness
+        options={{
+          runId: ev0.run_id,
+          mode: "replay",
+          serverReplayActive: true,
+          initialEvents: [],
+        }}
+      />
+    );
+
+    const es = MockEventSource.instances[0];
+    act(() => {
+      es.emit(ev0.type, ev0);
+      es.emit(ev1.type, ev1);
+    });
+
+    expect(screen.getByTestId("visible-count")).toHaveTextContent("2");
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    expect(screen.getByTestId("cursor")).toHaveTextContent("2");
+    expect(screen.getByTestId("visible-count")).toHaveTextContent("2");
+  });
+
+  it("clears stale standings on run switch and avoids flashing completed standings at replay cursor 0", async () => {
+    vi.stubGlobal("EventSource", MockEventSource);
+    const agg = aggregateEvents(FAKE_EVENTS);
+    const bundle1: RunBundle = {
+      summary: agg.summary!,
+      events: FAKE_EVENTS,
+      matches: agg.matches,
+      standings: agg.standings,
+      heatmap: agg.heatmap!,
+      calibration: null,
+      advice: null,
+      retrial: null,
+    };
+    const emptyRunSummary = {
+      ...bundle1.summary,
+      run_id: "pending-run",
+      matches: 0,
+      leaks: 0,
+      status: "running" as const,
+    };
+    const emptyBundle: RunBundle = {
+      summary: emptyRunSummary,
+      events: [],
+      standings: [],
+      matches: [],
+      heatmap: {
+        run_id: "pending-run",
+        defenses: [],
+        families: [],
+        scenarios: [],
+        cells: [],
+      },
+      calibration: null,
+      advice: null,
+      retrial: null,
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/health") {
+          return {
+            ok: true,
+            json: async () => ({
+              status: "ok",
+              mode: "replay",
+              replay: true,
+              active_run_id: bundle1.summary.run_id,
+            }),
+          };
+        }
+        if (url === "/api/runs") {
+          return {
+            ok: true,
+            json: async () => ({
+              runs: [bundle1.summary, emptyRunSummary],
+              default_run_id: bundle1.summary.run_id,
+            }),
+          };
+        }
+        if (url.includes("pending-run/bundle")) {
+          return { ok: true, json: async () => emptyBundle };
+        }
+        return { ok: true, json: async () => bundle1 };
+      })
+    );
+
+    render(<App />);
+    await screen.findByText(/8 matches · 3 leaks/);
+
+    // In replay mode at cursor 0, Leaderboard tab must not flash completed bundle1 standings
+    fireEvent.click(screen.getByRole("button", { name: /Leaderboard/i }));
+    expect(screen.queryByTestId("leaderboard-row-plain")).not.toBeInTheDocument();
+
+    // Switching to pending-run clears previous bundle cleanly
+    const selector = screen.getByLabelText("Select active run");
+    fireEvent.change(selector, { target: { value: "pending-run" } });
+    await waitFor(() => {
+      expect(screen.queryByTestId("leaderboard-row-plain")).not.toBeInTheDocument();
+    });
   });
 });

@@ -93,7 +93,9 @@ def test_replay_store_loads_sidecar_wave2_metadata(tmp_path: Path) -> None:
         asr_delta=-0.375,
         baseline_utility=0.95,
         retrial_utility=0.94,
-        per_scenario_diff={"refund_tool": {"baseline": 0.25, "retrial": 0.0}},
+        per_scenario_diff={
+            "refund_tool": {"baseline_asr": 0.25, "retrial_asr": 0.0, "asr_delta": -0.25}
+        },
     )
 
     sidecar = tmp_path / "demo_run.jsonl.meta.json"

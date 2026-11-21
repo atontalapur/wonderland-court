@@ -1,5 +1,4 @@
 import { Pause, Play, RotateCcw } from "lucide-react";
-import type { MouseEvent } from "react";
 import type { ReplaySpeed } from "../api/sse";
 
 interface ReplayControlsProps {
@@ -30,14 +29,6 @@ export function ReplayControls({
   onExitReplay,
 }: ReplayControlsProps) {
   const pct = totalEvents > 0 ? Math.round((cursor / totalEvents) * 100) : 0;
-
-  const handleBarClick = (e: MouseEvent<HTMLDivElement>) => {
-    if (totalEvents <= 0) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    if (rect.width <= 0) return;
-    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    onSeek(Math.round(ratio * totalEvents));
-  };
 
   return (
     <div
@@ -98,18 +89,7 @@ export function ReplayControls({
       </div>
 
       <div className="flex min-w-[180px] flex-1 items-center gap-3">
-        <div className="relative flex-1">
-          <div
-            role="presentation"
-            data-testid="replay-scrubber-bar"
-            onClick={handleBarClick}
-            className="h-2.5 w-full cursor-pointer overflow-hidden rounded-full border border-[#23293a] bg-[#0b0d14]"
-          >
-            <div
-              className="h-full bg-gradient-to-r from-amber-500 via-rose-500 to-emerald-500 transition-all duration-150"
-              style={{ width: `${pct}%` }}
-            />
-          </div>
+        <div className="relative flex flex-1 items-center py-1">
           <input
             type="range"
             aria-label="Replay event scrubber"
@@ -117,8 +97,18 @@ export function ReplayControls({
             max={totalEvents}
             value={cursor}
             onChange={(e) => onSeek(Number(e.target.value))}
-            className="sr-only"
+            className="peer absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0"
           />
+          <div
+            role="presentation"
+            data-testid="replay-scrubber-bar"
+            className="h-2.5 w-full overflow-hidden rounded-full border border-[#23293a] bg-[#0b0d14] peer-focus-visible:ring-2 peer-focus-visible:ring-amber-400 peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-[#131722]"
+          >
+            <div
+              className="h-full bg-gradient-to-r from-amber-500 via-rose-500 to-emerald-500 transition-all duration-150"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
         </div>
 
         <span

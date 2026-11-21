@@ -107,7 +107,11 @@ export function TranscriptDrawer({
                   <span>{m.match.match_id}</span>
                   <span
                     className={`h-1.5 w-1.5 rounded-full ${
-                      m.broken ? "bg-rose-500" : "bg-emerald-500"
+                      m.broken
+                        ? "bg-rose-500"
+                        : m.status === "running"
+                          ? "animate-pulse bg-amber-400"
+                          : "bg-emerald-500"
                     }`}
                   />
                 </button>
@@ -148,12 +152,16 @@ export function TranscriptDrawer({
                     className={`rounded px-2 py-0.5 font-editorial text-xs font-bold ${
                       current.broken
                         ? "court-stamp-leak bg-rose-600/20 text-rose-300"
-                        : "court-stamp-held bg-emerald-600/20 text-emerald-300"
+                        : current.status === "running"
+                          ? "border border-amber-500/40 bg-amber-500/15 text-amber-300"
+                          : "court-stamp-held bg-emerald-600/20 text-emerald-300"
                     }`}
                   >
                     {current.broken
                       ? `♥︎ OFF WITH HER HEAD (T${current.broken_on_turn ?? "?"})`
-                      : "♣︎ HELD"}
+                      : current.status === "running"
+                        ? "⏳ IN SESSION"
+                        : "♣︎ HELD"}
                   </span>
                 </div>
 

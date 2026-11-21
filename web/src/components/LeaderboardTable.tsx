@@ -225,7 +225,7 @@ export function LeaderboardTable({ standings }: LeaderboardTableProps) {
                         [{ciLowPct}% – {ciHighPct}%]
                       </span>
                     </div>
-                    <div className="relative mt-1.5 h-2 w-full rounded-full bg-[#0b0d14]">
+                    <div className="relative mt-1.5 h-2 w-full overflow-hidden rounded-full bg-[#0b0d14]">
                       {/* Wilson 95% CI span */}
                       <div
                         className="absolute top-0 h-2 rounded-full bg-slate-600/60"

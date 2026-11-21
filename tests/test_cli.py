@@ -76,6 +76,39 @@ def test_report_renders_all_formats_from_jsonl(fmt: str, tmp_path: Path) -> None
         assert "fake-run-0001" in content
 
 
+def test_report_reads_from_db_and_errors_without_default_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    from wonderland_court.contracts import dump_event, read_events
+    from wonderland_court.courtroom.db_reader import COURT_SCHEMA_SQL
+
+    monkeypatch.chdir(tmp_path)
+    missing_res = runner.invoke(app, ["report", "--format", "json"])
+    assert missing_res.exit_code == 1
+    assert ".court/court.db" in missing_res.output
+
+    db_path = tmp_path / "custom.db"
+    events = list(read_events(FAKE_RUN))
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(COURT_SCHEMA_SQL)
+        for ev in events:
+            conn.execute(
+                "INSERT INTO events (seq, run_id, ts, type, event_json) VALUES (?, ?, ?, ?, ?)",
+                (ev.seq, ev.run_id, ev.ts.isoformat(), ev.type, dump_event(ev)),
+            )
+        conn.commit()
+
+    out_json = tmp_path / "db_report.json"
+    db_res = runner.invoke(
+        app,
+        ["report", "--format", "json", "--db", str(db_path), "--out", str(out_json)],
+    )
+    assert db_res.exit_code == 0, db_res.output
+    assert json.loads(out_json.read_text(encoding="utf-8"))["summary"]["run_id"] == "fake-run-0001"
+
+
 def test_trial_exposes_selectable_tactics() -> None:
     """Rich help truncates on narrow CI terminals, so assert on the Click params."""
     root = cast(Any, get_command(app))
