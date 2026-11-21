@@ -314,6 +314,20 @@ def trial(
 # Commands other tracks build, reached through the registry
 
 
+DbOption = Annotated[
+    Path | None,
+    typer.Option(
+        help="SQLite database to read. Defaults to court.yaml's db_path (.court/court.db)."
+    ),
+]
+
+
+def _db_path(db: Path | None, config: Path) -> Path:
+    """--db, else the database `court trial -c <config>` writes, which court.yaml resolves
+    relative to its own folder."""
+    return db if db is not None else _settings(config).db_path
+
+
 @app.command()
 def serve(
     config: ConfigOption = DEFAULT_CONFIG,
@@ -324,14 +338,13 @@ def serve(
     replay: Annotated[
         Path | None, typer.Option(help="Replay a recorded run file instead of a live run.")
     ] = None,
-    speed: Annotated[float, typer.Option(help="Replay speed multiplier.")] = 4.0,
+    speed: Annotated[float, typer.Option(min=0.1, help="Replay speed multiplier.")] = 4.0,
+    db: DbOption = None,
 ) -> None:
     """Open the Courtroom dashboard."""
-    runner = registry.load_server_runner(_settings(config), default_client())
-    try:
-        runner.serve(host, port, replay, speed)
-    except registry.NotBuiltError as exc:
-        _fail(f"court serve: {exc}")
+    from wonderland_court.courtroom.server import run_server
+
+    run_server(host=host, port=port, replay=replay, speed=speed, db_path=_db_path(db, config))
 
 
 @app.command()
@@ -342,18 +355,36 @@ def report(
     ),
     run: Annotated[str | None, typer.Option(help="Run id. Defaults to the latest run.")] = None,
     out: Annotated[Path | None, typer.Option(help="Write to this file instead of stdout.")] = None,
+    db: DbOption = None,
+    input: Annotated[
+        Path | None, typer.Option("--input", "-i", help="Read events from a JSONL file.")
+    ] = None,
 ) -> None:
     """Write a report for a finished run."""
-    settings = _settings(config)
-    renderer = registry.load_report_renderer(settings, default_client())
+    from wonderland_court.courtroom.reports import write_report
+
+    resolved_db = db
+    if input is None:
+        resolved_db = _db_path(db, config)
+        if db is None and not resolved_db.is_file():
+            _fail(f"No database found at {resolved_db}; pass --db <path> or --input <run.jsonl>.")
+
     try:
-        text = renderer.render(settings.db_path, run, format.value)
-    except registry.NotBuiltError as exc:
-        _fail(f"court report: {exc}")
+        rendered = write_report(
+            fmt=format.value,
+            out_path=out,
+            db_path=resolved_db,
+            input_path=input,
+            run_id=run,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"Report error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
     if out is None:
-        typer.echo(text)
+        typer.echo(rendered)
     else:
-        out.write_text(text, encoding="utf-8")
+        typer.echo(f"Wrote {format.value.upper()} report to {out}")
 
 
 async def _latest_run(db_path: Path) -> str | None:
@@ -389,7 +420,11 @@ def advise(
     run_id = run or asyncio.run(_latest_run(settings.db_path))
     if run_id is None:
         _fail(f"No runs in {settings.db_path} yet. Run `court trial` first.")
-    typer.echo(asyncio.run(remediator.advise(settings.db_path, run_id)))
+    try:
+        advice = asyncio.run(remediator.advise(settings.db_path, run_id))
+    except RuntimeError as exc:  # the Caterpillar says when it can't read a run yet
+        _fail(f"court advise: {exc}")
+    typer.echo(advice)
 
 
 @app.command()

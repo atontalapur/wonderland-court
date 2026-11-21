@@ -22,6 +22,7 @@ from wonderland_court.contracts import (
 
 runner = CliRunner()
 WIDE = {"COLUMNS": "200", "NO_COLOR": "1"}
+FAKE_RUN = Path(__file__).resolve().parents[1] / "fixtures" / "fake_run.jsonl"
 
 COMMANDS = ["init", "doctor", "trial", "serve", "report", "ci", "advise", "retrial"]
 STUBS = ["init", "doctor", "ci", "retrial"]
@@ -51,26 +52,145 @@ def test_stubs_fail_until_built(command: str) -> None:
     assert "isn't built yet" in result.output
 
 
-@pytest.mark.parametrize(
-    ("command", "loader", "component"),
-    [
-        ("serve", "load_server_runner", registry.SERVER_RUNNER),
-        ("report", "load_report_renderer", registry.REPORT_RENDERER),
-        ("advise", "load_remediator", registry.REMEDIATOR),
-    ],
-)
-def test_track_commands_say_when_their_track_is_not_built(
-    command: str,
-    loader: str,
-    component: registry.Component,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+def test_advise_says_when_the_caterpillar_is_not_built(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(registry, loader, lambda config, client: registry.NotBuilt(component))
-    result = invoke(command)
+    component = registry.REMEDIATOR
+    monkeypatch.setattr(
+        registry, "load_remediator", lambda config, client: registry.NotBuilt(component)
+    )
+    result = invoke("advise")
     assert result.exit_code == 1
     assert f"{component.module} isn't built yet ({component.issue})" in result.output
+
+
+def test_advise_reports_the_caterpillars_error_without_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert invoke("advise").output.startswith("No runs in .court/court.db yet")
+    assert invoke("trial", "--mock").exit_code == 0
+    result = invoke("advise")
+    assert result.exit_code == 1
+    assert result.output.startswith("court advise: ")
+    assert "Traceback" not in result.output
+
+
+# serve and report, from the Courtroom track (#42)
+
+
+def test_serve_help_exposes_replay_and_db() -> None:
+    root = cast(Any, get_command(app))
+    serve_cmd = root.commands["serve"]
+    opts = {opt for param in serve_cmd.params for opt in param.opts}
+    assert {"--replay", "--speed", "--db", "--host", "--port", "--config"}.issubset(opts)
+
+    result = invoke("serve", "--help")
+    assert result.exit_code == 0
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "--replay" in plain
+    assert "--speed" in plain
+    assert "--db" in plain
+
+
+@pytest.mark.parametrize("fmt", ["html", "md", "json", "sarif"])
+def test_report_renders_all_formats_from_jsonl(fmt: str, tmp_path: Path) -> None:
+    out_file = tmp_path / f"report.{fmt}"
+    result = invoke("report", "--format", fmt, "--input", str(FAKE_RUN), "--out", str(out_file))
+    assert result.exit_code == 0, result.output
+    assert out_file.is_file()
+    content = out_file.read_text(encoding="utf-8")
+    if fmt == "sarif":
+        parsed = json.loads(content)
+        assert parsed["version"] == "2.1.0"
+        assert parsed["runs"][0]["results"]
+    elif fmt == "json":
+        parsed = json.loads(content)
+        assert parsed["summary"]["run_id"] == "fake-run-0001"
+    elif fmt == "html":
+        assert "<!DOCTYPE html>" in content or "<html" in content.lower()
+        assert "fake-run-0001" in content
+    else:
+        assert "fake-run-0001" in content
+
+
+def test_report_reads_from_db_and_errors_without_default_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from wonderland_court.contracts import dump_event, read_events
+    from wonderland_court.courtroom.db_reader import COURT_SCHEMA_SQL
+
+    monkeypatch.chdir(tmp_path)
+    missing_res = runner.invoke(app, ["report", "--format", "json"])
+    assert missing_res.exit_code == 1
+    assert ".court/court.db" in missing_res.output
+
+    db_path = tmp_path / "custom.db"
+    events = list(read_events(FAKE_RUN))
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(COURT_SCHEMA_SQL)
+        for ev in events:
+            conn.execute(
+                "INSERT INTO events (seq, run_id, ts, type, event_json) VALUES (?, ?, ?, ?, ?)",
+                (ev.seq, ev.run_id, ev.ts.isoformat(), ev.type, dump_event(ev)),
+            )
+        conn.commit()
+
+    out_json = tmp_path / "db_report.json"
+    db_res = runner.invoke(
+        app,
+        ["report", "--format", "json", "--db", str(db_path), "--out", str(out_json)],
+    )
+    assert db_res.exit_code == 0, db_res.output
+    assert json.loads(out_json.read_text(encoding="utf-8"))["summary"]["run_id"] == "fake-run-0001"
+
+
+def tea_shop_config(root: Path) -> Path:
+    """A court.yaml in a subfolder, like examples/tea_shop/court.yaml."""
+    folder = root / "examples" / "tea_shop"
+    folder.mkdir(parents=True)
+    path = folder / "court.yaml"
+    path.write_text("target: ollama:llama3.1\ndefenses: [plain]\nscenarios: [vault]\n")
+    return path
+
+
+def test_serve_reads_the_database_trial_writes_for_the_same_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from wonderland_court.courtroom import server
+
+    monkeypatch.chdir(tmp_path)
+    config = tea_shop_config(tmp_path)
+    served: list[Path] = []
+    monkeypatch.setattr(server, "run_server", lambda **kwargs: served.append(kwargs["db_path"]))
+
+    trial = invoke("trial", "--mock", "-c", str(config.relative_to(tmp_path)))
+    assert trial.exit_code == 0, trial.output
+    written = Path("examples/tea_shop/.court/court.db")
+    assert written.is_file()
+
+    assert invoke("serve", "-c", "examples/tea_shop/court.yaml").exit_code == 0
+    assert invoke("serve", "-c", "examples/tea_shop/court.yaml", "--db", "other.db").exit_code == 0
+    assert served == [written, Path("other.db")]
+
+
+def test_report_looks_for_the_configs_database(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    tea_shop_config(tmp_path)
+    missing = invoke("report", "-c", "examples/tea_shop/court.yaml", "--format", "json")
+    assert missing.exit_code == 1
+    assert "No database found at examples/tea_shop/.court/court.db" in missing.output
+
+    assert invoke("trial", "--mock", "-c", "examples/tea_shop/court.yaml").exit_code == 0
+    out = tmp_path / "report.json"
+    found = invoke(
+        "report", "-c", "examples/tea_shop/court.yaml", "--format", "json", "--out", str(out)
+    )
+    assert found.exit_code == 0, found.output
+    assert json.loads(out.read_text(encoding="utf-8"))["summary"]["run_id"].startswith("run-")
 
 
 def test_trial_exposes_selectable_tactics() -> None:

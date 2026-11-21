@@ -572,18 +572,32 @@ def context(scenario: ScenarioId, turn: int) -> AttackContext:
         (registry.load_judge, registry.CanaryJudge),
         (registry.load_utility_evaluator, registry.UnknownUtility),
         (registry.load_remediator, registry.NotBuilt),
-        (registry.load_server_runner, registry.NotBuilt),
-        (registry.load_report_renderer, registry.NotBuilt),
     ],
 )
 def test_missing_components_fall_back_to_fakes_with_a_warning(
-    loader: Callable[..., Any], fake_type: type[Any], caplog: pytest.LogCaptureFixture
+    loader: Callable[..., Any],
+    fake_type: type[Any],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Every track's module counts as missing here, whichever ones have landed.
+    def missing(name: str) -> ModuleType:
+        raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+
+    monkeypatch.setattr(registry.importlib, "import_module", missing)
     with caplog.at_level("WARNING", logger="wonderland_court.registry"):
         component = loader(CONFIG, default_client())
     assert isinstance(component, fake_type)
     assert component.fake is True
     assert "isn't built yet" in caplog.text
+
+
+def test_courtroom_components_load_real_implementations() -> None:
+    client = default_client()
+    server_runner = registry.load_server_runner(CONFIG, client)
+    report_renderer = registry.load_report_renderer(CONFIG, client)
+    assert not getattr(server_runner, "fake", False)
+    assert not getattr(report_renderer, "fake", False)
 
 
 def test_a_real_component_replaces_the_fake(monkeypatch: pytest.MonkeyPatch) -> None:
