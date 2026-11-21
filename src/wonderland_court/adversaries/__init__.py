@@ -7,6 +7,12 @@ from .bandit import (
 )
 from .cheshire_cat import CheshireCat
 from .decoders import decode_views
+from .dodo import (
+    DodoEvaluator,
+    DodoResult,
+    DodoSuiteResult,
+    evaluate_all,
+)
 from .drink_me import (
     DrinkMeGenerator,
     HidingStyle,
@@ -47,6 +53,9 @@ __all__ = [
     "TACTIC_CATALOG",
     "WRAPPING_MUTATORS",
     "CheshireCat",
+    "DodoEvaluator",
+    "DodoResult",
+    "DodoSuiteResult",
     "DrinkMeGenerator",
     "FamilyStrategy",
     "HidingStyle",
@@ -57,6 +66,7 @@ __all__ = [
     "TechniqueBandit",
     "UCB1Policy",
     "decode_views",
+    "evaluate_all",
     "register_family",
     "resolve_families",
     "resolve_mutators",
