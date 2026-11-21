@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -30,3 +31,31 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy src tests scripts
       - run: uv run pytest
+
+  ollama:
+    name: Ollama smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MODEL: qwen3.5:0.8b
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: ollama
+        uses: ./.github/actions/setup-ollama
+        with:
+          model: ${{ env.MODEL }}
+
+      - name: Generate
+        env:
+          OLLAMA_HOST: ${{ steps.ollama.outputs.host }}
+        run: |
+          set -euo pipefail
+          body=$(jq -n --arg m "$MODEL" '{
+            model: $m, prompt: "Reply with exactly: ready",
+            stream: false, think: false,
+            options: {num_predict: 8, temperature: 0}
+          }')
+          resp=$(curl -fsS "$OLLAMA_HOST/api/generate" -d "$body")
+          echo "$resp" | jq '{response, load_s: (.load_duration/1e9), eval_tokens_per_s: (.eval_count/(.eval_duration/1e9))}'
+          echo "$resp" | jq -e '.response | ascii_downcase | contains("ready")' > /dev/null
