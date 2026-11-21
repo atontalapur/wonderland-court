@@ -39,6 +39,7 @@ from .tactics import TacticSpec, resolve_families, resolve_mutators, tactic_for
 
 if TYPE_CHECKING:
     from .drink_me import ChainedPoison
+    from .evolution import Offspring
 
 DEFAULT_ATTACKER_MODEL = "qwen3.5:4b"
 
@@ -149,7 +150,7 @@ class CheshireCat:
 
         # A fuzzer that can evolve breeds this family's next payload from its near-misses;
         # otherwise the template or refiner writes it and the Hatter mutates it below.
-        evolved: tuple[list[str], str] | None = None
+        evolved: Offspring | None = None
         family_history = [t for t in context.history if t.attack.family == family.value]
         if isinstance(self._fuzzer, Evolver) and family_history:
             evolved = self._fuzzer.evolve_from_history(
@@ -158,7 +159,7 @@ class CheshireCat:
                 mutators=[m.value for m in resolve_mutators(context.enabled_mutators)],
             )
         if evolved is not None:
-            applied, message = evolved
+            applied, message = evolved.mutators, evolved.message
         else:
             applied = []
             message = await self._compose(context, strategy, rng)

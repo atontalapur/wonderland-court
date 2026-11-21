@@ -11,7 +11,7 @@ import random
 from collections.abc import Mapping
 from typing import cast
 
-from wonderland_court.adversaries.evolution import PayloadEvolver
+from wonderland_court.adversaries.evolution import Offspring, PayloadEvolver
 from wonderland_court.adversaries.mutators import MUTATOR_REGISTRY, WRAPPING_MUTATORS
 from wonderland_court.adversaries.ports import Mutator
 from wonderland_court.adversaries.tactics import resolve_mutators
@@ -115,11 +115,11 @@ class RavenFuzzer:
 
     def evolve_from_history(
         self, history: list[Turn], *, seed: int, mutators: list[str] | None = None
-    ) -> tuple[list[str], str] | None:
+    ) -> Offspring | None:
         """Breed a payload from the near-miss turns in `history` with `PayloadEvolver`.
 
-        `mutators` limits the pool to the match's allowed ids. Returns the mutator ids applied
-        and the payload, or `None` when no turn is a near-miss.
+        `mutators` limits the pool to the match's allowed ids. Returns the mutator ids applied,
+        the mutated message and the clean crossover, or `None` when no turn is a near-miss.
         """
         return PayloadEvolver(self, seed).evolve(history, mutators=mutators)
 

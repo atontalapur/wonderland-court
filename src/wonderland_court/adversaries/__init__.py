@@ -35,7 +35,7 @@ from .drink_me import (
     DrinkMeGenerator,
     HidingStyle,
 )
-from .evolution import PayloadEvolver
+from .evolution import Offspring, PayloadEvolver
 from .families import (
     FAMILIES,
     FamilyStrategy,
@@ -89,6 +89,7 @@ __all__ = [
     "FamilyStrategy",
     "HidingStyle",
     "MatchRecord",
+    "Offspring",
     "PayloadEvolver",
     "QueenJudge",
     "RavenFuzzer",

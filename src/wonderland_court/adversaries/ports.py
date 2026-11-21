@@ -28,6 +28,7 @@ from wonderland_court.contracts.models import (
 
 if TYPE_CHECKING:
     from .drink_me import ChainedPoison
+    from .evolution import Offspring
 
 Mutator = Callable[[str, random.Random], str]
 """A pure text transform. Same text and same seed give the same output."""
@@ -87,11 +88,12 @@ class Fuzzer(Protocol):
 
 @runtime_checkable
 class Evolver(Protocol):
-    """A fuzzer that can also breed a payload from a match's near-miss turns."""
+    """A fuzzer that can also breed a payload from a match's near-miss turns. The
+    `Offspring` keeps the clean crossover next to the mutated message."""
 
     def evolve_from_history(
         self, history: list[Turn], *, seed: int, mutators: list[str] | None = None
-    ) -> tuple[list[str], str] | None: ...
+    ) -> Offspring | None: ...
 
 
 @runtime_checkable
