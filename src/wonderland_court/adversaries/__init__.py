@@ -12,6 +12,16 @@ from .calibration import (
     CalibrationResult,
     calibrate,
 )
+from .caterpillar import (
+    FailureCluster,
+    RemediationAdvice,
+    RetrialComparison,
+    advise,
+    cluster_failures,
+    compare_retrial,
+    retrial_specs,
+    write_hardened_config,
+)
 from .cheshire_cat import CheshireCat
 from .decoders import decode_views
 from .dodo import (
@@ -72,19 +82,25 @@ __all__ = [
     "DodoResult",
     "DodoSuiteResult",
     "DrinkMeGenerator",
+    "FailureCluster",
     "FamilyStrategy",
     "HidingStyle",
     "MatchRecord",
     "PayloadEvolver",
     "QueenJudge",
     "RavenFuzzer",
+    "RemediationAdvice",
+    "RetrialComparison",
     "SelectionPolicy",
     "TacticSpec",
     "TechniqueBandit",
     "ThompsonPolicy",
     "UCB1Policy",
     "WarmStart",
+    "advise",
     "calibrate",
+    "cluster_failures",
+    "compare_retrial",
     "decode_views",
     "evaluate_all",
     "load_matches",
@@ -92,6 +108,8 @@ __all__ = [
     "register_family",
     "resolve_families",
     "resolve_mutators",
+    "retrial_specs",
     "tactic_for",
     "tactics_for",
+    "write_hardened_config",
 ]
