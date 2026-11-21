@@ -1,15 +1,36 @@
-"""Alice's advanced defenses. `spotlighting` lives here; `guard` and `dual_llm` follow (#17).
+"""Alice's advanced defenses: `spotlighting` and `guard`. `dual_llm` follows (#17).
 
 - `spotlighting` fences untrusted text with per-call markers and datamarks attachments, so
   Alice can tell data from instructions. Model targets only.
+- `guard` asks a safety classifier (Llama Guard 3 by default, or Granite Guardian) about each
+  turn before Alice sees it, and about her reply after. Model and agent targets.
+
+Model calls go through `DefensePolicy.models.client()`, the shared rate-limited client, so a
+guard and Alice share the local Ollama limit of 2 calls at a time. No call sends `tool_choice`.
 """
 
 import hashlib
+import json
 import re
+from dataclasses import dataclass
+from typing import Literal
 
-from wonderland_court.contracts import Document, Target, TargetKind, TargetReply, TargetRequest
+from wonderland_court.contracts import (
+    Document,
+    Message,
+    Target,
+    TargetKind,
+    TargetReply,
+    TargetRequest,
+)
 
-from .defense_base import DEFAULT_POLICY, Defended, DefensePolicy, append_to_last_user
+from .defense_base import (
+    DEFAULT_POLICY,
+    Defended,
+    DefensePolicy,
+    append_to_last_user,
+    untrusted_text,
+)
 from .targets import render_documents
 
 _FENCE_LOOKALIKE = re.compile(r"<{3,}|>{3,}")
@@ -101,3 +122,121 @@ class Spotlighting:
         system = f"{note}\n\n{request.system_prompt}" if request.system_prompt else note
         update = {"system_prompt": system, "messages": messages, "documents": []}
         return request.model_copy(update=update)
+
+
+# guard
+
+GuardFormat = Literal["llama_guard", "granite_guardian"]
+
+
+def guard_format(model: str) -> GuardFormat:
+    """Granite Guardian for a model whose name says so, such as `granite3-guardian:2b`.
+    Llama Guard 3 for anything else."""
+    name = model.lower()
+    return "granite_guardian" if "granite" in name and "guardian" in name else "llama_guard"
+
+
+@dataclass(frozen=True)
+class GuardVerdict:
+    safe: bool
+    detail: str
+    """The violated categories or risk, or why the answer couldn't be read."""
+
+
+def parse_llama_guard(text: str) -> GuardVerdict:
+    """Llama Guard 3 answers `safe`, or `unsafe` with the violated categories on the next line,
+    such as `unsafe\\nS1`. Anything else counts as unsafe: the guard fails closed."""
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    first = lines[0].lower().rstrip(".") if lines else ""
+    if first == "safe":
+        return GuardVerdict(safe=True, detail="safe")
+    if first.startswith("unsafe"):
+        categories = first.removeprefix("unsafe").strip(" :,") or (
+            lines[1] if len(lines) > 1 else ""
+        )
+        return GuardVerdict(safe=False, detail=categories.upper() or "unsafe")
+    return GuardVerdict(safe=False, detail=f"unreadable verdict {text[:40]!r}")
+
+
+def parse_granite_guardian(text: str, risk: str) -> GuardVerdict:
+    """Granite Guardian answers `Yes` when the risk is present and `No` when it isn't.
+    Anything else counts as unsafe."""
+    word = re.match(r"\W*(\w+)", text)
+    answer = word.group(1).lower() if word else ""
+    if answer == "no":
+        return GuardVerdict(safe=True, detail=f"no {risk}")
+    if answer == "yes":
+        return GuardVerdict(safe=False, detail=risk)
+    return GuardVerdict(safe=False, detail=f"unreadable verdict {text[:40]!r}")
+
+
+def _reply_text(reply: TargetReply) -> str:
+    """The reply as the guard reads it: the text, then one line per tool call."""
+    calls = [
+        f"Calls {call.name} with {json.dumps(call.arguments, sort_keys=True)}"
+        for call in reply.tool_calls
+    ]
+    return "\n".join([reply.content, *calls]).strip()
+
+
+class Guard:
+    """Asks a safety classifier about the turn before Alice sees it, and about her reply after.
+
+    The classifier reads the user's last message with its attachments, then the reply with its
+    tool calls. Llama Guard 3 checks its harm categories; it has no prompt-injection category,
+    though the 1B model flags common injections anyway. Granite Guardian checks the
+    `jailbreak` risk on the way in and `harm` on the way out. An answer the guard can't read
+    blocks the turn.
+
+    Model and agent targets: it only reads what goes in and what comes out. The reply carries
+    the guard's own latency on top of Alice's, since that is part of what the defense costs.
+    """
+
+    name = "guard"
+    BLOCKED = "Blocked by guard classifier."
+    GRANITE_INPUT_RISK = "jailbreak"
+    GRANITE_REPLY_RISK = "harm"
+
+    def __init__(
+        self, policy: DefensePolicy = DEFAULT_POLICY, *, check_replies: bool = True
+    ) -> None:
+        self.models = policy.models
+        self.format = guard_format(policy.models.guard)
+        self.check_replies = check_replies
+
+    def supports(self, kind: TargetKind) -> bool:
+        return True
+
+    async def classify(self, messages: list[Message]) -> tuple[GuardVerdict, int]:
+        """The verdict on the last message, and how long the classifier took in ms."""
+        client = self.models.client()
+        if self.format == "granite_guardian":
+            last = messages[-1].role
+            risk = self.GRANITE_REPLY_RISK if last == "assistant" else self.GRANITE_INPUT_RISK
+            answer = await client.chat(self.models.guard, messages, system_prompt=risk)
+            return parse_granite_guardian(answer.content, risk), answer.latency_ms
+        answer = await client.chat(self.models.guard, messages)
+        return parse_llama_guard(answer.content), answer.latency_ms
+
+    def wrap(self, target: Target) -> Target:
+        async def respond(request: TargetRequest) -> TargetReply:
+            text = untrusted_text(request)
+            turn = [Message(role="user", content=text)] if text else []
+            spent = 0
+            if turn:
+                verdict, spent = await self.classify(turn)
+                if not verdict.safe:
+                    return TargetReply(content=self.BLOCKED, blocked_by=self.name, latency_ms=spent)
+            reply = await target.respond(request)
+            spent += reply.latency_ms
+            answer = _reply_text(reply)
+            if self.check_replies and reply.blocked_by is None and answer:
+                verdict, more = await self.classify(
+                    [*turn, Message(role="assistant", content=answer)]
+                )
+                spent += more
+                if not verdict.safe:
+                    return TargetReply(content=self.BLOCKED, blocked_by=self.name, latency_ms=spent)
+            return reply.model_copy(update={"latency_ms": spent})
+
+        return Defended(target, respond)

@@ -1,11 +1,12 @@
 """What every defense is built from.
 
-A defense factory takes one `DefensePolicy`: what the deployer tells its defenses. `Defended`
-wraps a target and keeps its name and kind. The text views here are how filters read a text in
-every encoding an attacker might hide it in.
+A defense factory takes one `DefensePolicy`: the deployer's tool rules and the models that
+model-backed defenses such as `guard` call. `Defended` wraps a target and keeps its name
+and kind. The text views here are how filters read a text in every encoding an attacker might
+hide it in.
 
-Defense modules import this one, and nothing in it imports them, so the registry in `defenses`
-can list defenses from several modules without an import cycle.
+Both `defenses` and `defenses_advanced` import this module, and nothing in it imports them, so
+the registry in `defenses` can list every defense without an import cycle.
 """
 
 import base64
@@ -13,7 +14,7 @@ import binascii
 import re
 import unicodedata
 from collections.abc import Awaitable, Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from wonderland_court.contracts import (
     Defense,
@@ -23,6 +24,26 @@ from wonderland_court.contracts import (
     TargetRequest,
     ToolRule,
 )
+from wonderland_court.llm import default_client
+
+from .targets import ChatClient, render_documents
+
+DEFAULT_GUARD_MODEL = "llama-guard3:1b"
+"""Matches `CourtConfig.guard_model`'s default. A test holds the two together."""
+
+
+@dataclass(frozen=True)
+class DefenseModels:
+    """The models that model-backed defenses call, and the client they call them through."""
+
+    guard: str = DEFAULT_GUARD_MODEL
+    """The guard's classifier: a Llama Guard 3 or Granite Guardian model spec."""
+    llm: ChatClient | None = None
+    """None means `llm.default_client()`, looked up on each call, so every defense shares the
+    process-wide client's rate limits and cache."""
+
+    def client(self) -> ChatClient:
+        return self.llm or default_client()
 
 
 @dataclass(frozen=True)
@@ -30,10 +51,11 @@ class DefensePolicy:
     """What a deployer tells its defenses. Never the canary."""
 
     tool_rules: tuple[ToolRule, ...] = ()
+    models: DefenseModels = field(default_factory=DefenseModels)
 
 
 DEFAULT_POLICY = DefensePolicy()
-"""No tool rules. Every defense's `policy` argument defaults to it."""
+"""No tool rules and the default models. Every defense's `policy` argument defaults to it."""
 
 
 DefenseFactory = Callable[[DefensePolicy], Defense]
@@ -69,6 +91,15 @@ def append_to_last_user(messages: list[Message], text: str) -> list[Message]:
             messages[index] = messages[index].model_copy(update={"content": content})
             return messages
     return [*messages, Message(role="user", content=text)]
+
+
+def untrusted_text(request: TargetRequest) -> str:
+    """The text the user controls this turn: their last message, then the attachments."""
+    last_user = last_user_message(request)
+    parts = [last_user.content] if last_user and last_user.content else []
+    if request.documents:
+        parts.append(render_documents(request.documents))
+    return "\n\n".join(parts)
 
 
 # Text normalization and decoding

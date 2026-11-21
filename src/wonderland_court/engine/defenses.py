@@ -5,11 +5,12 @@ wraps in the order written, so the first name sits closest to the model and the 
 the request first and the reply last.
 
 Defenses never see the match's canary. They get what a deployer would configure: the tool
-rules. The output filter finds secrets by their shape (`WC-` and hex), not by their value.
+rules, and the models that model-backed defenses call. The output filter finds secrets by
+their shape (`WC-` and hex), not by their value.
 
-The four baseline defenses live here, and `spotlighting` lives in `defenses_advanced`.
-`guard` and `dual_llm` are planned (#17): naming one raises `NotBuiltError`, so `court trial`
-can skip that stack and say why.
+The four baseline defenses live here, and `spotlighting` and `guard` live in
+`defenses_advanced`. `dual_llm` is planned (#17): naming it raises `NotBuiltError`, so
+`court trial` can skip that stack and say why.
 """
 
 import re
@@ -27,13 +28,14 @@ from .defense_base import (
     DEFAULT_POLICY,
     Defended,
     DefenseFactory,
+    DefenseModels,
     DefensePolicy,
     append_to_last_user,
     injection_marker,
     last_user_message,
     views,
 )
-from .defenses_advanced import Spotlighting
+from .defenses_advanced import Guard, Spotlighting
 from .policy import broken_rule
 from .scenarios import CANARY_HEX_CHARS, CANARY_PREFIX
 from .targets import render_documents
@@ -43,8 +45,10 @@ __all__ = [
     "DEFENSES",
     "PLANNED",
     "DefenseFactory",
+    "DefenseModels",
     "DefensePolicy",
     "Defended",
+    "Guard",
     "InputFilter",
     "OutputFilter",
     "Plain",
@@ -183,11 +187,12 @@ DEFENSES: dict[str, DefenseFactory] = {
     "sandwich": Sandwich,
     "input_filter": InputFilter,
     "output_filter": OutputFilter,
+    "guard": Guard,
     "spotlighting": Spotlighting,
 }
 """Every defense by name. A factory takes the match's `DefensePolicy` and returns a `Defense`."""
 
-PLANNED: dict[str, str] = {"guard": "#17", "dual_llm": "#17"}
+PLANNED: dict[str, str] = {"dual_llm": "#17"}
 """Defenses that are named but not built yet, mapped to their issue. Naming one in a stack
 raises `NotBuiltError`, so `court trial` can skip that stack and say why."""
 

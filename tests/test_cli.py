@@ -231,12 +231,10 @@ def test_quick_mock_trial_runs_offline_and_records_the_run(
     db = tmp_path / "out" / "court.db"
     result = invoke("trial", "--quick", "--mock", "--db", str(db))
     assert result.exit_code == 0, result.output
-    assert (
-        "Skipping spotlighting+guard+output_filter: the guard defense isn't built yet (#17)"
-        in result.output
-    )
+    assert "Skipping" not in result.output  # every quick stack runs offline, guard included
+    assert "spotlighting+guard+output_filter vs refund_tool: held" in result.output
     assert "Off with her head!" in result.output
-    assert "5 of 6 matches leaked" in result.output
+    assert "5 of 8 matches leaked" in result.output
 
     rows, lines = recorded(db)
     assert rows == lines and len(lines) > 0

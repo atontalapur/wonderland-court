@@ -91,6 +91,7 @@ class CourtConfig(Contract):
     attacker_model: str = "qwen3.5:4b"
     judge_model: str = "llama3.1"
     guard_model: str = "llama-guard3:1b"
+    """The `guard` defense's classifier: a Llama Guard 3 or Granite Guardian model."""
     embed_model: str = "nomic-embed-text"
     db_path: Path = Path(".court/court.db")
 
