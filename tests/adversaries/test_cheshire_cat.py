@@ -152,7 +152,7 @@ def test_fixed_mode_never_switches() -> None:
         history = [*history, make_turn(turn, TechniqueFamily.ROLE_PLAY, blocked_by="guard")]
 
 
-@pytest.mark.parametrize("family", [None, "not_a_family", TechniqueFamily.PAIR.value])
+@pytest.mark.parametrize("family", [None, "not_a_family"])
 def test_fixed_mode_rejects_missing_or_unknown_family(family: str | None) -> None:
     context = make_context(mode=MatchMode.FIXED, family=family)
     with pytest.raises(ValueError):
@@ -317,13 +317,7 @@ def test_bandit_cooldown_lifts_when_every_arm_is_cooling() -> None:
 def test_family_registry_is_extensible() -> None:
     strategy = FamilyStrategy(family=TechniqueFamily.PAIR, openers={}, follow_ups={})
     assert strategy.opening(ScenarioId.MCP_POISON, "obj", random.Random(0)) == "obj"
-    assert set(FAMILIES) == {
-        TechniqueFamily.DIRECT_ASK,
-        TechniqueFamily.ROLE_PLAY,
-        TechniqueFamily.INDIRECT_INJECTION,
-        TechniqueFamily.AUTHORITY,
-        TechniqueFamily.ENCODING,
-    }
+    assert set(FAMILIES) == set(TechniqueFamily)
 
 
 def test_cat_works_with_the_real_hatter_and_drink_me() -> None:

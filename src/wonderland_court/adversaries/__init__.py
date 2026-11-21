@@ -1,9 +1,12 @@
 """Adversaries track: the Cheshire Cat, the Mad Hatter, Drink Me and the Queen of Hearts."""
 
 from .bandit import (
+    ArmStats,
     SelectionPolicy,
     TechniqueBandit,
+    ThompsonPolicy,
     UCB1Policy,
+    WarmStart,
 )
 from .cheshire_cat import CheshireCat
 from .decoders import decode_views
@@ -52,6 +55,7 @@ __all__ = [
     "RESEARCH_TECHNIQUE_FAMILIES",
     "TACTIC_CATALOG",
     "WRAPPING_MUTATORS",
+    "ArmStats",
     "CheshireCat",
     "DodoEvaluator",
     "DodoResult",
@@ -64,7 +68,9 @@ __all__ = [
     "SelectionPolicy",
     "TacticSpec",
     "TechniqueBandit",
+    "ThompsonPolicy",
     "UCB1Policy",
+    "WarmStart",
     "decode_views",
     "evaluate_all",
     "register_family",
