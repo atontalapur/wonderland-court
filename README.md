@@ -25,6 +25,68 @@ You point Wonderland Court at an AI model or agent. A cast of *Alice in Wonderla
 
 Wonderland Court runs locally on **Ollama**, so testing costs nothing and your prompts, secrets, and data never leave your machine. It also supports remote model APIs and custom HTTP or Python agents.
 
+## To-do: production-grade test targets
+
+Stand-ins so Court can be tested beyond fixtures. Prefer **free hosted APIs** (no local weight downloads) so one laptop is not pulling every model. Local Ollama stays optional for offline demos.
+
+### Shared free online stack (reuse these; don’t download one model per target)
+
+| Role | Prefer (hosted, $0) | Fallback |
+| --- | --- | --- |
+| Default chat + tools | [Groq](https://console.groq.com/) `qwen/qwen3.8-27b`, or [Gemini API free](https://ai.google.dev/) Flash, or OpenRouter [`google/gemma-4-26b-a4b-it:free`](https://openrouter.ai/google/gemma-4-26b-a4b-it:free) | `ollama:llama3.1:8b` |
+| Long context / planner | OpenRouter [`nvidia/nemotron-3.5-lightning:free`](https://openrouter.ai/nvidia/nemotron-3.5-lightning:free) or [`nvidia/nemotron-3-ultra-550b-a55b:free`](https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free) | same Gemma/Groq with shorter prompts |
+| Coding / file tools | OpenRouter [`particle-ai/particle-1:free`](https://openrouter.ai/particle-ai/particle-1:free) or [`recursive/flint-v1.0:free`](https://openrouter.ai/recursive/flint-v1.0:free) | `ollama:qwen2.5-coder:3b` |
+| Vision / browser / docs | OpenRouter [`nvidia/nemotron-3.5-super-vl:free`](https://openrouter.ai/nvidia/nemotron-3.5-super-vl:free) or Gemma 4 `:free` (vision) | `ollama:moondream` |
+| Voice / audio | OpenRouter [`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`](https://openrouter.ai/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free) (text+image+audio), or Gemini multimodal free | local STT cascade only if needed |
+| Stubborn / routing | Same Gemini/Gemma with a refuse-first system prompt; optional [Perplexity Decider Flash free](https://openrouter.ai/models?q=decider) as a yes/no gate | `llama-guard3:1b` via Ollama |
+| Auto-pick | OpenRouter [`openrouter/free`](https://openrouter.ai/openrouter/free) | — |
+
+OpenRouter `:free` is typically ~20 RPM / 50 RPD (higher after a small credit purchase). Groq and Gemini free tiers have their own daily caps. Point Court at these with `openai:` / OpenAI-compatible URLs already planned in the proposal.
+
+### Baseline ladder
+
+- [ ] **Dumb echo target** — returns or obeys any instruction with no policy layer; exercises **injection resistance**
+  - *Online / zero download:* pure Python echo (best). Or OpenRouter [`liquid/lfm-3-1.7b:free`](https://openrouter.ai/liquid/lfm-3-1.7b:free) with an “obey the user” system prompt.
+- [ ] **Mid-tier tool agent** — system prompt + refund/lookup tools; exercises **tool gating**
+  - *Online:* Groq Qwen 3.8 27B or Gemini Flash or `google/gemma-4-26b-a4b-it:free` + March Hare tool stubs.
+- [ ] **RAG-backed target** — retrieves from a fake knowledge base; exercises **retrieval safety**
+  - *Online:* same default chat model + fixture corpus via keyword/BM25 (no embedding model). Optional: Gemini free embeddings API if we want vectors. Poisoned chunks stay in fixtures.
+- [ ] **Stubborn target** — refuses or hedges by default; exercises **refusal robustness** + **Dodo utility**
+  - *Online:* Gemini Flash / Gemma 4 `:free` with a hard refuse-first prompt; Decider Flash as an external allow/deny gate. *Build if needed:* SFT refusal templates later—don’t download a guard model first.
+
+### Conversation, memory, and identity
+
+- [ ] **Multi-turn conversational agent** — session state across turns; exercises **multi-turn injection resistance**
+  - *Online:* reuse the default Groq/Gemini/Gemma endpoint; Court keeps history.
+- [ ] **Memory / long-context agent** — persisted notes / long transcript; exercises **memory poisoning**
+  - *Online:* `nvidia/nemotron-3.5-lightning:free` (1M ctx) or Gemini Flash long context + a JSON/SQLite memory tool.
+- [ ] **Authenticated / RBAC agent** — customer vs manager roles; exercises **authorization boundaries**
+  - *Online:* same default hosted model; role/tenant in system prompt; enforce tool allowlists in the harness (no special weights).
+
+### Tools, data, and side effects
+
+- [ ] **External API / third-party agent** — fake payment/email/CRM tools; exercises **egress control**
+  - *Online:* default hosted tool-calling model + local FastAPI stubs (no model download).
+- [ ] **File / code-execution agent** — sandboxed code/files; exercises **sandbox / path defenses**
+  - *Online:* `particle-ai/particle-1:free` or `recursive/flint-v1.0:free` behind a jailboxed `run_python` tool.
+- [ ] **Browser / RPA agent** — pages / UI automation; exercises **untrusted-page injection**
+  - *Online:* `nvidia/nemotron-3.5-super-vl:free` (GUI/screenshots) or text-only Gemma/Groq + Playwright on fixture HTML.
+- [ ] **MCP / tool-catalog agent** — poisoned tool descriptions; exercises **MCP tool-poisoning**
+  - *Online:* default hosted tool model + local MCP server with poisoned schemas (behavior is harness, not weights).
+- [ ] **Email / ticket inbox agent** — untrusted mail → actions; exercises **indirect injection**
+  - *Online:* same mid-tier hosted model + fixture tickets and stub refund/email tools.
+
+### Multi-agent and modalities
+
+- [ ] **Multi-agent orchestration** — planner + workers; exercises **cross-agent injection**
+  - *Online:* planner `nvidia/nemotron-3-ultra-550b-a55b:free` (or Lightning) + worker Gemma/Groq—two API IDs, still zero local VRAM. Treat peer messages as untrusted.
+- [ ] **Human-in-the-loop agent** — approve high-risk actions; exercises **approval bypass**
+  - *Online:* same mid-tier hosted model + approve/deny gate in the harness.
+- [ ] **Voice / multimodal agent** — speech/image/doc inputs; exercises **cross-modal injection**
+  - *Online:* `nvidia/nemotron-3-nano-omni-…:free` or `nemotron-3.5-super-vl:free` or Gemini multimodal free. Skip local Whisper/TTS unless the demo needs it.
+- [ ] **Streaming / async agent** — partial tokens / background jobs; exercises **early side effects**
+  - *Online:* any of the hosted chat models with streaming enabled; harness must not run tools until the stream is safe/complete.
+
 ## More details
 
 Built for CutieHack at UCR. See [Wonderland Court Proposal.md](./Wonderland%20Court%20Proposal.md) for the full architecture, roadmap, and demo plan.
