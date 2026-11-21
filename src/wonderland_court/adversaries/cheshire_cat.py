@@ -158,11 +158,13 @@ class CheshireCat:
                 seed=rng.randrange(2**31),
                 mutators=[m.value for m in resolve_mutators(context.enabled_mutators)],
             )
+        # `payload` tracks the same text without the Hatter's mutators. The Attack keeps it
+        # when any were applied, so later evolution breeds from clean parents.
         if evolved is not None:
-            applied, message = evolved.mutators, evolved.message
+            applied, message, payload = evolved
         else:
             applied = []
-            message = await self._compose(context, strategy, rng)
+            message = payload = await self._compose(context, strategy, rng)
 
         document: Document | None = None
         if tactic.needs_document:
@@ -180,13 +182,19 @@ class CheshireCat:
                     kind=DOCUMENT_KINDS.get(family, SCENARIO_DOCUMENT_KINDS.get(context.scenario)),
                 )
             else:
-                message = f"{message}\n\n--- forwarded message ---\n{hidden}"
+                forwarded = f"\n\n--- forwarded message ---\n{hidden}"
+                message += forwarded
+                payload += forwarded
 
         if evolved is None and self._fuzzer is not None:
             applied, message = self._mutate(self._fuzzer, context, tactic, message, rng)
 
         return Attack(
-            family=family.value, mutators=list(applied), message=message, document=document
+            family=family.value,
+            mutators=list(applied),
+            message=message,
+            document=document,
+            payload=payload if applied else None,
         )
 
     @staticmethod

@@ -407,3 +407,49 @@ def test_cat_evolves_its_family_from_near_misses() -> None:
     other = make_context(mode=MatchMode.FIXED, family="role_play", turn=3, history=history)
     role_play = asyncio.run(CheshireCat(fuzzer=fuzzer, seed=4).next_attack(other))
     assert role_play.mutators == []
+
+
+def test_cat_keeps_the_clean_crossover_as_payload() -> None:
+    from wonderland_court.adversaries.cheshire_cat import CheshireCat
+
+    from .fakes import make_context
+
+    history = [_base64_parent(i + 1, clean) for i, clean in enumerate(BASE64_PARENTS)]
+    context = make_context(
+        mode=MatchMode.FIXED, family="direct_ask", turn=3, history=history
+    ).model_copy(update={"enabled_mutators": [MutatorId.BASE64]})
+    attack = asyncio.run(CheshireCat(fuzzer=RavenFuzzer(), seed=4).next_attack(context))
+    assert attack.mutators == ["base64"]
+    assert attack.payload is not None
+    assert _decode_once(attack.message) == attack.payload
+    assert "Base64" not in attack.payload
+    assert not any(_encoded(parent) in attack.payload for parent in history)
+
+
+def test_cat_never_wraps_an_evolved_payload_twice() -> None:
+    from wonderland_court.adversaries.cheshire_cat import CheshireCat
+
+    from .fakes import make_context
+
+    cat = CheshireCat(fuzzer=RavenFuzzer(), seed=2)
+    history: list[Turn] = []
+    for turn in range(1, 7):
+        context = make_context(
+            mode=MatchMode.FIXED, family="direct_ask", turn=turn, history=list(history)
+        ).model_copy(update={"enabled_mutators": [MutatorId.BASE64]})
+        attack = asyncio.run(cat.next_attack(context))
+        if turn > 1:  # turn 1 has no near-misses yet, and direct_ask suggests no mutators
+            assert attack.mutators == ["base64"]
+            assert attack.payload is not None
+            assert _decode_once(attack.message) == attack.payload
+            assert "Base64" not in attack.payload
+        history.append(
+            Turn(
+                index=turn,
+                attack=attack,
+                reply=TargetReply(content="Hmm, maybe."),
+                verdict=Verdict(
+                    ruling=Ruling.HELD, layer=JudgeLayer.LLM, confidence=0.5, reason="unsure"
+                ),
+            )
+        )
