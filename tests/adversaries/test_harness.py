@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import json
 import math
 import re
 import socket
 import time
 import unicodedata
+import urllib.parse
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,7 @@ import pytest
 from wonderland_court.adversaries.ports import ChatClient, EmbeddingClient
 from wonderland_court.adversaries.refusals import is_refusal
 from wonderland_court.contracts.models import Message, ScenarioId, TargetReply
+from wonderland_court.engine.scenarios import CORE_SCENARIOS, make_canary
 
 from .fakes import CANARY, FakeEmbeddingClient, FakeLLMClient, make_context, make_stakes
 
@@ -37,6 +40,9 @@ CATEGORIES = {
     "spaced",
     "base64",
     "hex",
+    "percent",
+    "escapes",
+    "binary",
     "rot13",
     "caesar",
     "reversed",
@@ -45,13 +51,15 @@ CATEGORIES = {
     "zero_width",
     "homoglyph",
     "acrostic",
+    "glued",
     "split",
     "benign",
     "near_miss",
 }
 HELD_CATEGORIES = {"benign", "near_miss"}
-# The 4-hex fixture form and the 6-hex lowercase form `scripts/make_fake_run.py` draws.
-CANARY_FORM = re.compile(r"WC-(?:[0-9A-F]{4}|[0-9a-f]{6})")
+# The 4-hex fixture form, the 6-hex lowercase form `scripts/make_fake_run.py` draws and the
+# 8-hex lowercase form `engine.scenarios.make_canary` makes.
+CANARY_FORM = re.compile(r"WC-(?:[0-9A-F]{4}|[0-9a-f]{6}|[0-9a-f]{8})")
 ZERO_WIDTH = re.compile("[​‌‍⁠﻿]")
 KINDS = {"hard_refusal", "blocked", "soft_reminder", "helpful"}
 
@@ -123,6 +131,41 @@ def test_unicode_cases_hide_the_canary_in_unicode() -> None:
             lookalikes = [ch for ch in case["reply"] if ord(ch) > 127]
             assert lookalikes, case["id"]
             assert all(unicodedata.category(ch)[0] in "LN" for ch in lookalikes), case["id"]
+
+
+def test_canary_form_covers_engine_canaries() -> None:
+    engine = [make_canary(s, seed) for s in CORE_SCENARIOS for seed in range(50)]
+    assert all(CANARY_FORM.fullmatch(c) for c in engine)
+    in_corpus = [case["id"] for case in CASES if len(case["canary"]) == len(engine[0])]
+    assert len(in_corpus) >= 10, in_corpus
+
+
+def _bits_to_text(reply: str) -> str:
+    groups = re.findall(r"[01]+", reply.replace("0b", " "))
+    chunks = [g[i : i + 8] for g in groups for i in range(0, len(g), 8)]
+    return bytes(int(c, 2) for c in chunks).decode("latin-1")
+
+
+def test_encoded_cases_decode_to_the_canary() -> None:
+    # Decoded with the standard library, not the Queen's decoders, so a fixture typo shows.
+    decoders = {
+        "percent": lambda r: urllib.parse.unquote(urllib.parse.unquote(r)),
+        "escapes": lambda r: codecs.decode(r, "unicode_escape"),
+        "binary": _bits_to_text,
+    }
+    for case in CASES:
+        decode = decoders.get(case["category"])
+        if decode is not None:
+            assert case["canary"] in decode(case["reply"]), case["id"]
+
+
+def test_glued_cases_glue_the_token_to_letters() -> None:
+    for case in CASES:
+        if case["category"] == "glued":
+            token = case["canary"].split("-", 1)[1].lower()
+            assert len(token) >= 6, case["id"]
+            glued = rf"[^\W\d_]{token}|{token}[^\W\d_]"
+            assert re.search(glued, case["reply"].lower()), case["id"]
 
 
 # Refusal corpus
