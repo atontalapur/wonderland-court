@@ -62,4 +62,7 @@ runs:
     - name: Pull model (cache miss)
       if: steps.model-cache.outputs.cache-hit != 'true'
       shell: bash
-      run: ~/.ollama-dist/bin/ollama pull "${{ inputs.model }}"
+      # The progress spinner floods the log, so keep only the last lines.
+      run: |
+        set -euo pipefail
+        ~/.ollama-dist/bin/ollama pull "${{ inputs.model }}" 2>&1 | tail -n 2
