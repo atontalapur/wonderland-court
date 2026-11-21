@@ -258,6 +258,11 @@ class ModelTarget:
         return reply.model_copy(update=update) if update else reply
 
 
+def is_agent_target(spec: TargetConfig) -> bool:
+    """Whether a `court.yaml` target is a black-box agent: `python:`, an http(s) URL or a block."""
+    return not isinstance(spec, str) or spec.strip().partition(":")[0].lower() in AGENT_PREFIXES
+
+
 def build_target(
     spec: TargetConfig,
     llm: ChatClient | None = None,

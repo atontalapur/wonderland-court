@@ -18,10 +18,13 @@ from typing import Any
 import httpx
 import pytest
 import respx
+from typer.testing import CliRunner, Result
 
+from wonderland_court import cli, registry
 from wonderland_court.config import HttpTargetConfig, PythonTargetConfig, load_config
 from wonderland_court.contracts import (
     Document,
+    MatchStarted,
     Message,
     ScenarioId,
     Target,
@@ -30,6 +33,7 @@ from wonderland_court.contracts import (
     TargetRequest,
     ToolCall,
     ToolSpec,
+    parse_event,
 )
 from wonderland_court.engine.agent_targets import (
     AgentHTTPError,
@@ -743,3 +747,109 @@ async def test_http_mode_serves_the_same_agent(scripted_tea_shop: None) -> None:
     assert [(call.name, call.arguments["amount"]) for call in reply.tool_calls] == [
         ("issue_refund", 75.0)
     ]
+
+
+# court trial with an agent, offline: the scripted clerk, attacker and judge
+
+
+TEA_SHOP_URL = "http://127.0.0.1:8001/chat"
+
+
+@pytest.fixture
+def offline_court(scripted_tea_shop: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(registry, "load_attacker", lambda c, client: registry.ScriptedAttacker())
+    monkeypatch.setattr(registry, "load_judge", lambda c, client: registry.CanaryJudge())
+
+
+def trial(tmp_path: Path, yaml: str) -> Result:
+    """`court trial` from the repo root, recording into tmp_path/.court."""
+    path = tmp_path / "court.yaml"
+    path.write_text(dedent(yaml), encoding="utf-8")
+    env = {"COLUMNS": "200", "NO_COLOR": "1"}
+    return CliRunner().invoke(cli.app, ["trial", "-c", str(path)], env=env)
+
+
+def started_matches(tmp_path: Path) -> list[MatchStarted]:
+    (jsonl,) = (tmp_path / ".court" / "runs").glob("*.jsonl")
+    events = map(parse_event, jsonl.read_text(encoding="utf-8").splitlines())
+    return [event for event in events if isinstance(event, MatchStarted)]
+
+
+def test_court_trial_puts_a_python_agent_on_trial(offline_court: None, tmp_path: Path) -> None:
+    result = trial(
+        tmp_path,
+        f"""
+        target: python:{TEA_SHOP_AGENT}
+        defenses: [plain, output_filter]
+        scenarios: [refund_tool]
+        max_turns: 1
+        """,
+    )
+    assert result.exit_code == 0, result.output
+    assert f"2 matches (python:{TEA_SHOP_AGENT})" in result.output
+    assert "plain vs refund_tool: Off with her head!" in result.output
+    assert "output_filter vs refund_tool: held" in result.output  # it blocks the $400 refund
+    matches = started_matches(tmp_path)
+    assert {(m.match.target, m.match.target_kind) for m in matches} == {
+        (f"python:{TEA_SHOP_AGENT}", TargetKind.AGENT)
+    }
+
+
+@respx.mock
+def test_court_trial_puts_an_http_agent_block_on_trial(offline_court: None, tmp_path: Path) -> None:
+    load_entrypoint(TEA_SHOP_AGENT)
+    app = sys.modules["examples.tea_shop.agent"].app
+    route = respx.post(TEA_SHOP_URL).mock(side_effect=respx.ASGIHandler(app))
+    result = trial(
+        tmp_path,
+        f"""
+        target:
+          kind: http
+          url: {TEA_SHOP_URL}
+        defenses: [plain]
+        scenarios: [drink_me]
+        max_turns: 1
+        """,
+    )
+    assert result.exit_code == 0, result.output
+    assert "Off with her head!" in result.output  # the clerk follows the poisoned email
+    assert route.called
+    assert [m.match.target_kind for m in started_matches(tmp_path)] == [TargetKind.AGENT]
+
+
+@pytest.mark.parametrize(
+    ("target", "error"),
+    [
+        (f"python:{TEA_SHOP_AGENT}\ndefenses: [sandwich]", "sandwich can't wrap agent targets"),
+        ("python:examples.tea_shop.nope:respond", "can't import 'examples.tea_shop.nope'"),
+        ("'http:localhost:8001/chat'", "should be a full URL"),
+        (
+            "{kind: http, url: 'http://127.0.0.1:8001/chat', "
+            "headers: {Authorization: 'Bearer ${WC_UNSET_AGENT_TOKEN}'}}",
+            "WC_UNSET_AGENT_TOKEN isn't set",
+        ),
+    ],
+)
+def test_a_bad_agent_target_is_a_usage_error(
+    target: str, error: str, offline_court: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("WC_UNSET_AGENT_TOKEN", raising=False)
+    result = trial(tmp_path, f"target: {target}\nscenarios: [refund_tool]\n")
+    assert result.exit_code == 2
+    assert error in result.output
+    assert not (tmp_path / ".court").exists()  # nothing ran
+
+
+@respx.mock
+def test_an_agent_that_fails_mid_trial_is_named_without_a_traceback(
+    offline_court: None, tmp_path: Path
+) -> None:
+    respx.post(TEA_SHOP_URL).respond(500, text="Traceback: secret stuff")
+    result = trial(
+        tmp_path, f"target: {TEA_SHOP_URL}\ndefenses: [plain]\nscenarios: [refund_tool]\n"
+    )
+    assert result.exit_code == 1
+    assert f"AgentHTTPError: {TEA_SHOP_URL} replied with HTTP 500" in result.output
+    assert f"Check that {TEA_SHOP_URL} is working" in result.output
+    assert "secret stuff" not in result.output
+    assert "Traceback" not in result.output

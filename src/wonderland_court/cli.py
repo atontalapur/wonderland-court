@@ -45,7 +45,7 @@ from wonderland_court.engine.init_doctor import (
 from wonderland_court.engine.mock import MockTarget
 from wonderland_court.engine.runner import TrialResult, plan_matches, run_trial
 from wonderland_court.engine.store import CourtReader, CourtStore
-from wonderland_court.engine.targets import build_target, canonical_spec
+from wonderland_court.engine.targets import build_target, canonical_spec, is_agent_target
 from wonderland_court.llm import RateLimitedLLMClient, default_client, set_default_client
 
 app = typer.Typer(
@@ -206,6 +206,7 @@ async def _trial(
     settings: CourtConfig,
     *,
     mock: bool,
+    agent: Target | None,
     defenses: list[str],
     families: list[TechniqueFamily],
     mutators: list[MutatorId],
@@ -224,10 +225,13 @@ async def _trial(
                 registry.CanaryJudge(),
             )
         else:
-            assert isinstance(settings.target, str)
             client = RateLimitedLLMClient(cache=SQLiteResponseCache(store))
-            set_default_client(client)
-            target = build_target(settings.target, client)
+            set_default_client(client)  # a Python agent may borrow it, as the tea shop's does
+            if agent is not None:
+                target = agent
+            else:
+                assert isinstance(settings.target, str)
+                target = build_target(settings.target, client)
             attacker = registry.load_attacker(settings, client)
             judge = registry.load_judge(settings, client)
         with Progress(console=console, transient=True) as progress:
@@ -289,16 +293,21 @@ def trial(
     settings = settings.model_copy(update=updates)
     families, mutators = family or [], mutator or []
 
+    # An agent is built here, so a bad entrypoint, URL or ${ENV_VAR} is a usage error. A model
+    # target waits for the run's rate-limited client.
+    agent: Target | None = None
     if mock:
-        name = MockTarget.name
-    elif not isinstance(settings.target, str):
-        _fail("HTTP and Python agent targets arrive with #19. Use a model target for now.")
+        name, kind = MockTarget.name, MockTarget.kind
     else:
         try:
-            name = canonical_spec(settings.target)
+            if is_agent_target(settings.target):
+                agent = build_target(settings.target)
+                name, kind = agent.name, agent.kind
+            else:
+                assert isinstance(settings.target, str)
+                name, kind = canonical_spec(settings.target), TargetKind.MODEL
         except ValueError as exc:
             _fail(str(exc), code=2)
-    kind = TargetKind.MODEL  # agent targets arrive with #19
     defenses = _runnable_defenses(settings.defenses, kind, console)
     try:
         planned = plan_matches(
@@ -319,6 +328,7 @@ def trial(
             _trial(
                 settings,
                 mock=mock,
+                agent=agent,
                 defenses=defenses,
                 families=families,
                 mutators=mutators,
@@ -329,10 +339,12 @@ def trial(
     except Exception as exc:
         if mock:
             raise  # nothing outside Court runs in a mock trial, so this is a bug: keep the trace
+        check = "Run `court doctor` to check that Ollama is running and the models are pulled."
+        if kind is TargetKind.AGENT:
+            check = f"Check that {name} is working. {check}"
         _fail(
             f"The trial stopped: {type(exc).__name__}: {exc}\n"
-            f"The run is marked failed in {settings.db_path}. Run `court doctor` to check that "
-            "Ollama is running and the models are pulled."
+            f"The run is marked failed in {settings.db_path}. {check}"
         )
     console.print(
         f"\n{result.leaks} of {len(result.matches)} matches leaked. Run [bold]{result.run_id}[/]"
