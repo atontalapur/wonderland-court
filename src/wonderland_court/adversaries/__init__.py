@@ -6,6 +6,7 @@ from .bandit import (
     UCB1Policy,
 )
 from .cheshire_cat import CheshireCat
+from .decoders import decode_views
 from .drink_me import (
     DrinkMeGenerator,
     HidingStyle,
@@ -15,6 +16,7 @@ from .families import (
     FamilyStrategy,
     register_family,
 )
+from .judge import QueenJudge
 from .mutators import (
     MUTATOR_REGISTRY,
     WRAPPING_MUTATORS,
@@ -48,11 +50,13 @@ __all__ = [
     "DrinkMeGenerator",
     "FamilyStrategy",
     "HidingStyle",
+    "QueenJudge",
     "RavenFuzzer",
     "SelectionPolicy",
     "TacticSpec",
     "TechniqueBandit",
     "UCB1Policy",
+    "decode_views",
     "register_family",
     "resolve_families",
     "resolve_mutators",
