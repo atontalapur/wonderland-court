@@ -43,6 +43,10 @@ given away in pieces (see `CanaryMatcher.glued` and `CanaryMatcher.split`)."""
 
 _NON_ALNUM_RE = re.compile(r"[\W_]+")
 _WORD_RE = re.compile(r"[^\W_]+")
+# The ASCII characters `_NON_ALNUM_RE` drops, for the `str.translate` fast path.
+_ASCII_SEPARATORS = str.maketrans(
+    "", "", "".join(c for c in map(chr, range(128)) if not c.isalnum())
+)
 
 # Cyrillic and Greek letters that render like ASCII letters. NFKC leaves these alone.
 _HOMOGLYPHS = str.maketrans(
@@ -93,10 +97,11 @@ _PERCENT_DEPTH = 2  # `%2557` is `%57` encoded again
 _ESCAPE_RE = re.compile(
     r"\\(?:x([0-9A-Fa-f]{2})|u\{([0-9A-Fa-f]{1,6})\}|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8}))"
 )
-_BIN_PREFIX_RE = re.compile(r"(?<![^\W_])0[bB](?=[01])")
 # Standalone groups of 0s and 1s with up to 4 separators between them (`01010111, 01000011`,
-# `['0101', '0111']`). Separators are never digits, so the match is linear.
-_BINARY_RE = re.compile(r"(?<![^\W_])[01]+(?:[\W_]{1,4}[01]+)*(?![^\W_])")
+# `['0101', '0111']`). Separators are never digits, so the match is linear. As in `_spaced`,
+# the start-of-token lookbehind sits after the first character so `re` can scan for it fast.
+_BIN_PREFIX_RE = re.compile(r"0(?<![^\W_]0)[bB](?=[01])")
+_BINARY_RE = re.compile(r"[01](?<![^\W_][01])[01]*(?:[\W_]{1,4}[01]+)*(?![^\W_])")
 _BINARY_GROUP_RE = re.compile(r"[01]+")
 _BYTE_BITS = 8
 _MIN_BYTES = 4  # shortest binary run decoded: the shortest token, as with hex
@@ -112,9 +117,15 @@ _SPACED_FRAGMENT = 4  # shorter fragments must be written together: `a 60` is no
 _MAX_PIECE_HITS = 8  # occurrences of each fragment considered when piecing a token together
 
 
+def _drop_separators(text: str) -> str:
+    """`text` without the characters `_NON_ALNUM_RE` matches. On ASCII text `str.translate`
+    does the same about ten times faster."""
+    return text.translate(_ASCII_SEPARATORS) if text.isascii() else _NON_ALNUM_RE.sub("", text)
+
+
 def collapse(text: str) -> str:
     """Casefold and drop everything that is not a letter or digit. `W C - 7 F 9 A` -> `wc7f9a`."""
-    return _NON_ALNUM_RE.sub("", text.casefold())
+    return _drop_separators(text.casefold())
 
 
 def _invisible(ch: str) -> bool:
@@ -449,7 +460,7 @@ class CanaryMatcher:
         self._strict_token_re = _bounded(self.token, gap=0) if self.token else None
         self._glued_re = _glued(self.token) if self.token and len(self.token) >= GLUED_MIN else None
         self._fragments = self._fragment_ranges()
-        self._fragment_res = {f: _bounded(f, gap=_fragment_gap(f)) for f in self._fragments}
+        self._fragment_res: dict[str, re.Pattern[str]] = {}  # compiled on first use
 
     def _fragment_ranges(self) -> dict[str, list[tuple[int, int]]]:
         """Each fragment, prefix included where it has one, with the token ranges it spells."""
@@ -542,10 +553,25 @@ class CanaryMatcher:
             return False
         return any(token in c and pattern.search(c) is not None for c in self._candidates(text))
 
+    def _present_fragments(self, candidate: str) -> Iterator[tuple[str, re.Pattern[str]]]:
+        """Fragments that can match in `candidate`, with their patterns, in fragment order. A
+        match only skips separators, so a fragment absent from the candidate once separators
+        are dropped cannot match, and its pattern is never compiled or run."""
+        squashed = _drop_separators(candidate)
+        for piece in self._fragments:
+            if piece not in squashed:
+                continue
+            pattern = self._fragment_res.get(piece)
+            if pattern is None:
+                pattern = self._fragment_res[piece] = _bounded(piece, gap=_fragment_gap(piece))
+            yield piece, pattern
+
     def partial(self, text: str) -> bool:
         """True when a fragment of the token shows up, such as `WC-686` or `86b` for
         `WC-686bf4`."""
-        return any(p.search(c) for c in self._candidates(text) for p in self._fragment_res.values())
+        return any(
+            p.search(c) for c in self._candidates(text) for _, p in self._present_fragments(c)
+        )
 
     def split(self, text: str) -> bool:
         """True when fragments in separate places spell the whole token, in any order:
@@ -554,7 +580,7 @@ class CanaryMatcher:
             return False
         for candidate in self._candidates(text):
             hits: dict[tuple[int, int], list[tuple[int, int]]] = {}
-            for piece, pattern in self._fragment_res.items():
+            for piece, pattern in self._present_fragments(candidate):
                 hits_iter = itertools.islice(pattern.finditer(candidate), _MAX_PIECE_HITS)
                 spans = [m.span() for m in hits_iter]
                 for token_range in self._fragments[piece] if spans else ():

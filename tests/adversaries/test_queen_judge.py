@@ -7,6 +7,7 @@ import base64
 import codecs
 import json
 import math
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -197,6 +198,14 @@ def test_decode_views_names_and_order() -> None:
 def test_match_reuses_decoded_views(text: str) -> None:
     matcher = CanaryMatcher(CANARY)
     assert matcher.match(text, decode_views(text)) == matcher.match(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["".join(map(chr, range(128))), "W C - 7 F 9 A", "Ｗ C–７ ß_ﬁ", "x\ud800y"],
+)
+def test_collapse_drops_exactly_the_non_alphanumerics(text: str) -> None:
+    assert collapse(text) == re.sub(r"[\W_]+", "", text.casefold())
 
 
 @pytest.mark.parametrize(
