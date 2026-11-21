@@ -17,6 +17,16 @@ from wonderland_court.contracts.models import Contract
 
 PresetName = Literal["first_blood", "quick", "full"]
 DEFENSE_PART = re.compile(r"[A-Za-z0-9_.-]+")
+SHARD_SPEC = re.compile(r"\s*(\d+)\s*/\s*(\d+)\s*")
+
+
+def parse_shard(spec: str) -> tuple[int, int]:
+    """`"2/3"` as `(2, 3)`: the part, from 1, and how many parts there are."""
+    found = SHARD_SPEC.fullmatch(spec)
+    part, total = (int(found[1]), int(found[2])) if found else (0, 0)
+    if not 1 <= part <= total:
+        raise ValueError(f"shard {spec!r} should be k/N with 1 <= k <= N, such as 2/3")
+    return part, total
 
 
 DEFAULT_REQUEST_TEMPLATE: dict[str, Any] = {
@@ -112,6 +122,12 @@ class CourtConfig(Contract):
     """The model `dual_llm` reads untrusted text with. Unset means the target's own model."""
     embed_model: str = "nomic-embed-text"
     db_path: Path = Path(".court/court.db")
+    match_timeout_s: float | None = Field(default=900.0, gt=0)
+    """How long one match, or one Dodo check, may run. A match that runs over ends early and is
+    left out of the standings. None means no limit."""
+    shard: str | None = None
+    """`k/N` plays only every N-th match of the schedule, from the k-th, so N laptops can split
+    one tournament. `court merge` joins the parts into one run."""
 
     @field_validator("defenses")
     @classmethod
@@ -122,6 +138,14 @@ class CourtConfig(Contract):
         if len(set(defenses)) != len(defenses):
             raise ValueError("each defense can only be listed once")
         return defenses
+
+    @field_validator("shard")
+    @classmethod
+    def _check_shard(cls, shard: str | None) -> str | None:
+        if shard is None:
+            return None
+        part, total = parse_shard(shard)
+        return f"{part}/{total}"
 
     @field_validator("scenarios")
     @classmethod
