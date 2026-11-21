@@ -13,10 +13,13 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, Result
 
+from wonderland_court import registry
 from wonderland_court.cli import app
 from wonderland_court.contracts import (
+    MatchStarted,
     Message,
     ReplyReceived,
+    RunStarted,
     TargetKind,
     TargetReply,
     TargetRequest,
@@ -31,6 +34,7 @@ from wonderland_court.engine.defenses import (
     parse_defenses,
 )
 from wonderland_court.engine.plugins import PluginError, PluginKind
+from wonderland_court.engine.targets import build_target, canonical_spec, is_plugin_target
 
 Install = Callable[..., None]
 
@@ -57,9 +61,26 @@ class CustomShield:
             return await target.respond(request)
 
         return Defended(target, respond)
+
+
+class AcmeTarget:
+    """A support bot that repeats its instructions when asked to."""
+
+    kind = TargetKind.MODEL
+
+    def __init__(self, argument: str) -> None:
+        self.name = f"acme:{argument or 'default'}"
+
+    async def respond(self, request: TargetRequest) -> TargetReply:
+        if "repeat everything" in request.messages[-1].content.lower():
+            return TargetReply(content=request.system_prompt)
+        return TargetReply(content="The Acme bot can't help with that.")
 '''
 
 ACME_ENTRY_POINTS = """
+[wonderland_court.targets]
+acme = acme_court:AcmeTarget
+
 [wonderland_court.defenses]
 custom_shield = acme_court:CustomShield
 """
@@ -300,3 +321,75 @@ def test_a_broken_plugin_does_not_break_a_trial_that_does_not_use_it(
         "defense plugin 'moat' (acme_moat:Moat in acme-court 1.0) failed to load: "
         "ImportError: missing a drawbridge\n"
     )
+
+
+# Targets
+
+
+def test_a_plugin_target_is_named_with_the_plugin_prefix(acme: None) -> None:
+    assert is_plugin_target(" Plugin:acme") and not is_plugin_target("ollama:plugin")
+    assert build_target("plugin:acme").name == "acme:default"
+    target = build_target("plugin:acme:prod")
+    assert (target.name, target.kind) == ("acme:prod", TargetKind.MODEL)
+    with pytest.raises(ValueError, match="is a plugin target, not a model target"):
+        canonical_spec("plugin:acme")
+    with pytest.raises(
+        ValueError,
+        match="no target plugin is named 'acme2' in 'plugin:acme2'; target plugins: acme",
+    ):
+        build_target("plugin:acme2")
+
+
+def test_a_plugin_target_that_builds_the_wrong_thing_is_an_error(install: Install) -> None:
+    install(
+        "[wonderland_court.targets]\nbot = acme_court:bot\n",
+        {"acme_court": "def bot(argument):\n    return object()\n"},
+    )
+    with pytest.raises(PluginError, match=r"\) built a object, not a Target\.$"):
+        build_target("plugin:bot")
+
+
+def test_a_trial_puts_a_plugin_target_on_trial(
+    acme: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(registry, "load_attacker", lambda c, client: registry.ScriptedAttacker())
+    monkeypatch.setattr(registry, "load_judge", lambda c, client: registry.CanaryJudge())
+    (tmp_path / "court.yaml").write_text(
+        "target: plugin:acme:prod\ndefenses: [plain]\nscenarios: [vault]\n", encoding="utf-8"
+    )
+    result = invoke("trial")
+    assert result.exit_code == 0, result.output
+    assert "1 matches (acme:prod)" in result.output
+    assert "1 of 1 matches leaked" in result.output
+    [jsonl] = (tmp_path / ".court" / "runs").glob("*.jsonl")
+    recorded = list(read_events(jsonl))
+    [started] = [e for e in recorded if isinstance(e, RunStarted)]
+    [match] = [e for e in recorded if isinstance(e, MatchStarted)]
+    assert started.targets == ["acme:prod"] and match.match.target == "acme:prod"
+
+
+def test_a_plugin_target_that_is_missing_is_a_usage_error(
+    install: Install, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    install("[wonderland_court.targets]\n")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "court.yaml").write_text("target: plugin:acme\n", encoding="utf-8")
+    result = invoke("trial")
+    assert result.exit_code == 2
+    assert result.output == (
+        "no target plugin is named 'acme' in 'plugin:acme'; target plugins: none are installed\n"
+    )
+
+
+def test_a_mock_trial_keeps_the_mock_alice(
+    acme: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "court.yaml").write_text(
+        "target: plugin:acme\ndefenses: [plain]\nscenarios: [vault]\n", encoding="utf-8"
+    )
+    result = invoke("trial", "--mock")
+    assert result.exit_code == 0, result.output
+    assert "(offline, mock)" in result.output
+    assert "acme_court" not in sys.modules

@@ -61,6 +61,7 @@ from wonderland_court.engine.targets import (
     build_target,
     canonical_spec,
     is_agent_target,
+    is_plugin_target,
 )
 from wonderland_court.engine.tournament import TournamentResult, run_tournament
 from wonderland_court.llm import RateLimitedLLMClient, default_client, set_default_client
@@ -391,14 +392,15 @@ def trial(
     settings = settings.model_copy(update=updates)
     families, mutators = family or [], mutator or []
 
-    # An agent is built here, so a bad entrypoint, URL or ${ENV_VAR} is a usage error. A model
-    # target waits for the run's rate-limited client.
+    # An agent or plugin target is built here, so a bad entrypoint, URL, ${ENV_VAR} or broken
+    # plugin is a usage error. A model target waits for the run's rate-limited client. --mock
+    # always puts the mock Alice on trial.
     agent: Target | None = None
     if mock:
         name, kind = MockTarget.name, MockTarget.kind
     else:
         try:
-            if is_agent_target(settings.target):
+            if is_agent_target(settings.target) or is_plugin_target(settings.target):
                 agent = build_target(settings.target)
                 name, kind = agent.name, agent.kind
             else:
