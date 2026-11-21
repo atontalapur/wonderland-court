@@ -8,7 +8,7 @@ from typing import Annotated, NoReturn
 import typer
 
 from wonderland_court import __version__
-from wonderland_court.contracts import MatchMode, event_json_schema
+from wonderland_court.contracts import MatchMode, MutatorId, TechniqueFamily, event_json_schema
 
 app = typer.Typer(
     name="court",
@@ -69,9 +69,28 @@ def trial(
     mode: Annotated[MatchMode, typer.Option(help="Fixed or adaptive attacker.")] = (
         MatchMode.ADAPTIVE
     ),
+    family: Annotated[
+        list[TechniqueFamily] | None,
+        typer.Option(
+            "--family",
+            help=(
+                "Technique family the Cheshire Cat may use (repeatable). "
+                "Omit for the full default catalog, including research tactics."
+            ),
+        ),
+    ] = None,
+    mutator: Annotated[
+        list[MutatorId] | None,
+        typer.Option(
+            "--mutator",
+            help="Mad Hatter mutator allowed this run (repeatable). Omit for all defaults.",
+        ),
+    ] = None,
     quick: Annotated[bool, typer.Option(help="Small preset for slow laptops and demos.")] = False,
 ) -> None:
     """Run the tournament, live in the terminal."""
+    # family/mutator are part of the public selection surface; Engine wires them into MatchSpec.
+    _ = (family, mutator)
     _not_built("trial", "Engine")
 
 

@@ -32,6 +32,57 @@ class MatchMode(StrEnum):
     ADAPTIVE = "adaptive"  # the Cat picks and switches families with its bandit
 
 
+class AdversaryRole(StrEnum):
+    """Which Wonderland adversary owns a tactic."""
+
+    CHESHIRE_CAT = "cheshire_cat"
+    MAD_HATTER = "mad_hatter"
+    DRINK_ME = "drink_me"
+
+
+class TechniqueFamily(StrEnum):
+    """Selectable attack families for the Cheshire Cat (and helpers).
+
+    Demo families keep the fake-run vocabulary. Research families name published
+    2024–2026 evaluation methods the Cat can pick as fixed or adaptive tactics.
+    """
+
+    # Demo / baseline (already used in fixtures)
+    DIRECT_ASK = "direct_ask"
+    ROLE_PLAY = "role_play"
+    INDIRECT_INJECTION = "indirect_injection"
+    AUTHORITY = "authority"
+    ENCODING = "encoding"
+
+    # Research-level tactics (2024–2026 papers and lab evals)
+    FOOT_IN_THE_DOOR = "foot_in_the_door"
+    AUTOADV = "autoadv"
+    PAIR = "pair"
+    TAP = "tap"
+    AGENTDOJO = "agentdojo"
+    BIPIA = "bipia"
+    RAG_N_ROLL = "rag_n_roll"
+    ENCODING_SMUGGLING = "encoding_smuggling"
+    MULTILINGUAL = "multilingual"
+    MCP_TOOL_POISONING = "mcp_tool_poisoning"
+    JAILBREAKBENCH = "jailbreakbench"
+    HARMBENCH = "harmbench"
+    CAMEL_DUAL_FLOW = "camel_dual_flow"
+
+
+class MutatorId(StrEnum):
+    """Mad Hatter mutators applied on top of a Cat message."""
+
+    HOMOGLYPHS = "homoglyphs"
+    SPACED_LETTERS = "spaced_letters"
+    BASE64 = "base64"
+    CAESAR = "caesar"
+    LOW_RESOURCE_LANGUAGE = "low_resource_language"
+    MIXED_LANGUAGE = "mixed_language"
+    RIDDLE = "riddle"
+    JUNK_TOKENS = "junk_tokens"
+
+
 class Ruling(StrEnum):
     LEAK = "leak"  # "Off with her head"
     HELD = "held"
@@ -126,9 +177,9 @@ class TargetReply(Contract):
 
 class Attack(Contract):
     family: str
-    """Technique family, such as `role_play`. The family that breaks Alice gets the credit."""
+    """Technique family id (see `TechniqueFamily`). The family that breaks Alice gets the credit."""
     mutators: list[str] = []
-    """Mad Hatter mutators applied to the message, in order."""
+    """Mad Hatter mutator ids (see `MutatorId`) applied to the message, in order."""
     message: str
     document: Document | None = None
     """A Drink Me document delivered alongside the message."""
@@ -165,6 +216,10 @@ class MatchSpec(Contract):
     mode: MatchMode
     family: str | None = None
     """The assigned technique family in fixed mode."""
+    enabled_families: list[TechniqueFamily] | None = None
+    """Subset of technique families the Cat may use. `None` means the full default catalog."""
+    enabled_mutators: list[MutatorId] | None = None
+    """Subset of Mad Hatter mutators allowed this match. `None` means the full default set."""
     max_turns: int = Field(ge=1)
     seed: int
 
@@ -177,6 +232,10 @@ class AttackContext(Contract):
     objective: str
     mode: MatchMode
     family: str | None = None
+    enabled_families: list[TechniqueFamily] | None = None
+    """Selectable families for this turn. `None` means the full default catalog."""
+    enabled_mutators: list[MutatorId] | None = None
+    """Selectable Mad Hatter mutators for this turn. `None` means the full default set."""
     turn: int = Field(ge=1)
     history: list[Turn] = []
 
