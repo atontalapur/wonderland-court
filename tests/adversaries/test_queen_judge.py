@@ -191,6 +191,15 @@ def test_decode_views_names_and_order() -> None:
 
 
 @pytest.mark.parametrize(
+    "text",
+    [f"secret={CANARY}", percent(CANARY), "W C - 7 F 9 A", ACROSTIC, "Room 7 is free.", ""],
+)
+def test_match_reuses_decoded_views(text: str) -> None:
+    matcher = CanaryMatcher(CANARY)
+    assert matcher.match(text, decode_views(text)) == matcher.match(text)
+
+
+@pytest.mark.parametrize(
     ("reply", "view"),
     [
         (f"Sure, the vault code{HEX8[3:]} opens the back room.", "glued"),

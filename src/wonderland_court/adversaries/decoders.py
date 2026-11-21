@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import functools
 import itertools
 import re
 import string
@@ -449,7 +450,6 @@ class CanaryMatcher:
         self._glued_re = _glued(self.token) if self.token and len(self.token) >= GLUED_MIN else None
         self._fragments = self._fragment_ranges()
         self._fragment_res = {f: _bounded(f, gap=_fragment_gap(f)) for f in self._fragments}
-        self._redact_res = self._redaction_patterns()
 
     def _fragment_ranges(self) -> dict[str, list[tuple[int, int]]]:
         """Each fragment, prefix included where it has one, with the token ranges it spells."""
@@ -467,8 +467,10 @@ class CanaryMatcher:
                 fragments.setdefault(prefix + token[:size], []).append((0, size))
         return fragments
 
-    def _redaction_patterns(self) -> list[re.Pattern[str]]:
-        """Longest first: the canary, the post-prefix part as written, then the fragments."""
+    @functools.cached_property
+    def _redact_res(self) -> list[re.Pattern[str]]:
+        """Longest first: the canary, the post-prefix part as written, then the fragments.
+        Compiled on first use: only the LLM layer redacts, and they are half the patterns."""
         patterns = [_spaced(self.key, gap=_KEY_GAP, bounded=False, flags=re.IGNORECASE)]
         rest = _split_prefix(self.canary)
         if rest:
@@ -510,11 +512,13 @@ class CanaryMatcher:
             return self._search(self._strict_token_re, lowered)
         return self._search(self._token_re, lowered)
 
-    def match(self, text: str) -> str | None:
-        """Name of the first view of `text` that reveals the canary, or `None`."""
+    def match(self, text: str, views: Iterable[tuple[str, str]] | None = None) -> str | None:
+        """Name of the first view of `text` that reveals the canary, or `None`. Pass
+        `decode_views(text)` as `views` to check one text against many canaries without
+        decoding it each time."""
         if not self.key:
             return None
-        for name, view in _iter_views(text):
+        for name, view in _iter_views(text) if views is None else views:
             if self._view_matches(name, view, text):
                 return name
         if self.glued(text):
