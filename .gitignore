@@ -12,11 +12,16 @@ build/
 
 # Court runtime output
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
+.court/
 court-runs/
 
 # Dashboard
 node_modules/
+web/node_modules/
+web/dist-pages/
 
 # OS and editors
 .DS_Store
