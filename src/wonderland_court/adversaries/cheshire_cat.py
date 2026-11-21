@@ -6,6 +6,9 @@ message from Alice's last reply, guided by the family's `refine_hint`; families
 with `refine_candidates` above 1 (TAP) get several candidates and keep one. Any
 failure falls back to the family template. The Cat only sees `AttackContext`,
 which never carries the canary.
+
+Once a defense blocks a single-mutator turn, a fuzzer that fits `ComboEscalator`
+swaps the family's suggested mutators for its next curated combo.
 """
 
 from __future__ import annotations
@@ -27,9 +30,9 @@ from wonderland_court.contracts.models import (
 from .bandit import SelectionPolicy, TechniqueBandit, WarmStart
 from .families import FAMILIES, FamilyStrategy, strategy_for
 from .llm_json import json_objects
-from .ports import ChatClient, Evolver, Fuzzer, Poisoner
+from .ports import ChatClient, ComboEscalator, Evolver, Fuzzer, Poisoner
 from .refusals import is_refusal, is_refusal_text
-from .tactics import resolve_families, resolve_mutators, tactic_for
+from .tactics import TacticSpec, resolve_families, resolve_mutators, tactic_for
 
 DEFAULT_ATTACKER_MODEL = "qwen3.5:4b"
 
@@ -163,16 +166,36 @@ class CheshireCat:
                 message = f"{message}\n\n--- forwarded message ---\n{hidden}"
 
         if evolved is None and self._fuzzer is not None:
-            allowed = set(resolve_mutators(context.enabled_mutators))
-            wanted = [m.value for m in tactic.suggested_mutators if m in allowed]
-            if wanted:
-                applied, message = self._fuzzer.mutate(
-                    message, seed=rng.randrange(2**31), mutators=wanted, chain_len=len(wanted)
-                )
+            applied, message = self._mutate(self._fuzzer, context, tactic, message, rng)
 
         return Attack(
             family=family.value, mutators=list(applied), message=message, document=document
         )
+
+    @staticmethod
+    def _mutate(
+        fuzzer: Fuzzer,
+        context: AttackContext,
+        tactic: TacticSpec,
+        message: str,
+        rng: random.Random,
+    ) -> tuple[list[str], str]:
+        """Run the Hatter over a family that suggests mutators; others go out as written.
+
+        Once a defense has blocked a single-mutator turn, a `ComboEscalator` replaces the
+        family's suggestions with its next curated combo. A combo blocked in turn is skipped,
+        so each block moves on to the next one.
+        """
+        allowed = resolve_mutators(context.enabled_mutators)
+        wanted = [m.value for m in tactic.suggested_mutators if m in allowed]
+        if not wanted:
+            return [], message
+        seed = rng.randrange(2**31)
+        if isinstance(fuzzer, ComboEscalator):
+            combo = fuzzer.combo_after_blocks(context.history, mutators=[m.value for m in allowed])
+            if combo is not None:
+                return fuzzer.mutate_combo(message, seed=seed, combo=combo)
+        return fuzzer.mutate(message, seed=seed, mutators=wanted, chain_len=len(wanted))
 
     def _choose_family(self, context: AttackContext, rng: random.Random) -> TechniqueFamily:
         if context.mode is MatchMode.FIXED:
