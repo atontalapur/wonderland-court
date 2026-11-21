@@ -1,14 +1,14 @@
 name: Set up Ollama
 description: >
-  Install a pinned, CPU-only Ollama, start the server, and pull a model.
-  The binary and the model are both cached, so warm runs skip every download.
+  Install a pinned, CPU-only Ollama, start the server, and pull one or more models.
+  The binary and the models are cached, so warm runs skip every download.
 
 inputs:
   version:
     description: Ollama release tag, without the leading "v".
     default: "0.40.10"
-  model:
-    description: Model to pull, for example qwen3.5:0.8b.
+  models:
+    description: Space-separated models to pull, for example "qwen3.5:0.8b nomic-embed-text".
     default: "qwen3.5:0.8b"
 
 outputs:
@@ -21,7 +21,7 @@ runs:
   steps:
     - name: Restore Ollama binary
       id: bin-cache
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.ollama-dist
         key: ollama-bin-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}-cpu
@@ -29,10 +29,12 @@ runs:
     - name: Download Ollama (cache miss)
       if: steps.bin-cache.outputs.cache-hit != 'true'
       shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
         mkdir -p ~/.ollama-dist
-        curl -fsSL "https://github.com/ollama/ollama/releases/download/v${{ inputs.version }}/ollama-linux-amd64.tar.zst" \
+        curl -fsSL "https://github.com/ollama/ollama/releases/download/v${VERSION}/ollama-linux-amd64.tar.zst" \
           | zstd -d | tar -x -C ~/.ollama-dist
         # GitHub runners have no GPU. GPU backends live in subdirectories of
         # lib/ollama and make up most of the 1.5 GB archive, so drop them
@@ -52,17 +54,21 @@ runs:
         done
         echo "::error::Ollama did not start"; cat "$RUNNER_TEMP/ollama.log"; exit 1
 
-    - name: Restore model
+    - name: Restore models
       id: model-cache
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.ollama/models
-        key: ollama-model-${{ inputs.model }}
+        key: ollama-models-${{ inputs.models }}
 
-    - name: Pull model (cache miss)
+    - name: Pull models (cache miss)
       if: steps.model-cache.outputs.cache-hit != 'true'
       shell: bash
       # The progress spinner floods the log, so keep only the last lines.
+      env:
+        MODELS: ${{ inputs.models }}
       run: |
         set -euo pipefail
-        ~/.ollama-dist/bin/ollama pull "${{ inputs.model }}" 2>&1 | tail -n 2
+        for model in $MODELS; do
+          ~/.ollama-dist/bin/ollama pull "$model" 2>&1 | tail -n 2
+        done

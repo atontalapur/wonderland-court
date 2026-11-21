@@ -51,6 +51,8 @@ warn_redundant_casts = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_default_fixture_loop_scope = "function"
+markers = ["ollama: needs a running Ollama server (run with `pytest -m ollama`)"]
+addopts = "-m 'not ollama'"
 
 [dependency-groups]
 dev = [
