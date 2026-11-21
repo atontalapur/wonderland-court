@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import yaml
 from typer.main import get_command
 from typer.testing import CliRunner, Result
 
@@ -65,15 +66,65 @@ def test_advise_says_when_the_caterpillar_is_not_built(
     assert f"{component.module} isn't built yet ({component.issue})" in result.output
 
 
-def test_advise_reports_the_caterpillars_error_without_a_traceback(
+def test_advise_groups_a_mock_runs_failures_and_writes_the_hardened_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
     assert invoke("advise").output.startswith("No runs in .court/court.db yet")
+    assert invoke("trial", "--quick", "--mock").exit_code == 0
+    result = invoke("advise")
+    assert result.exit_code == 0, result.output
+    assert "Failure families in run run-" in result.output
+    assert "Recommended defense: spotlighting+guard+output_filter" in result.output
+    assert "the spotlighting defense isn't built yet (#17)" in result.output
+    patch = (tmp_path / "court.hardened.yaml").read_text(encoding="utf-8")
+    assert yaml.safe_load(patch) == {"defenses": ["spotlighting+guard+output_filter"]}
+    with sqlite3.connect(tmp_path / ".court" / "court.db") as connection:
+        rows = connection.execute("SELECT recommended_defense FROM remediation_advice")
+        assert rows.fetchall() == [("spotlighting+guard+output_filter",)]
+
+
+def test_advise_reads_and_writes_next_to_the_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    tea_shop_config(tmp_path)
+    assert invoke("trial", "--mock", "-c", "examples/tea_shop/court.yaml").exit_code == 0
+    result = invoke("advise", "-c", "examples/tea_shop/court.yaml")
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "examples" / "tea_shop" / "court.hardened.yaml").is_file()
+    assert not (tmp_path / "court.hardened.yaml").exists()
+
+
+def test_advise_says_when_the_run_is_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
     assert invoke("trial", "--mock").exit_code == 0
+    result = invoke("advise", "--run", "run-nope")
+    assert result.exit_code == 1
+    assert "No run run-nope in .court/court.db." in result.output
+    missing = invoke("advise", "--db", "elsewhere.db")
+    assert missing.exit_code == 1
+    assert "No runs in elsewhere.db yet" in missing.output
+    assert not (tmp_path / "elsewhere.db").exists()
+
+
+def test_advise_on_a_model_run_says_when_the_models_fail(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Unreachable:
+        async def advise(self, db_path: Path, run_id: str, **kwargs: object) -> None:
+            raise ConnectionError("Ollama isn't answering on 127.0.0.1:11434")
+
+    monkeypatch.chdir(tmp_path)
+    assert invoke("trial", "--mock").exit_code == 0
+    with sqlite3.connect(tmp_path / ".court" / "court.db") as connection:
+        connection.execute("UPDATE runs SET target = 'ollama:llama3.1'")
+    monkeypatch.setattr(registry, "load_remediator", lambda config, client: Unreachable())
     result = invoke("advise")
     assert result.exit_code == 1
-    assert result.output.startswith("court advise: ")
+    assert "court advise stopped: ConnectionError: Ollama isn't answering" in result.output
     assert "Traceback" not in result.output
 
 
