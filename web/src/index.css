@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+    --court-bg: #0b0d14;
+    --court-card: #131722;
+    --court-border: #23293a;
+    --court-crimson: #e11d48;
+    --court-gold: #eab308;
+    --court-emerald: #10b981;
+  }
+
+  body {
+    background-color: var(--court-bg);
+    color: #e2e8f0;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+}
+
+.font-editorial {
+  font-family: "Iowan Old Style", "Palatino Linotype", Georgia, Cambria, "Times New Roman", serif;
+  letter-spacing: -0.015em;
+}
+
+.court-card {
+  background-color: #131722;
+  border: 1px solid #23293a;
+}
+
+.court-stamp-leak {
+  border: 2px solid #e11d48;
+  box-shadow: 0 0 18px rgba(225, 29, 72, 0.22);
+  transform: rotate(-1.5deg);
+}
+
+.court-stamp-held {
+  border: 2px solid #10b981;
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.16);
+}
+
+/* Custom subtle scrollbars for obsidian panels */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0b0d14;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #23293a;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
