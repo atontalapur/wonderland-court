@@ -8,8 +8,11 @@ import httpx
 import pytest
 import respx
 from rich.console import Console
+from typer.testing import CliRunner, Result
 
+from wonderland_court import cli
 from wonderland_court.config import load_config
+from wonderland_court.engine import init_doctor
 from wonderland_court.engine.init_doctor import (
     REQUIRED_MODELS,
     Check,
@@ -226,3 +229,91 @@ def test_api_keys_are_reported_as_set_or_not_but_never_shown(
     assert "sk-test-do-not-print" not in text
     assert "OPENAI_API_KEY is set" in text
     assert "ANTHROPIC_API_KEY is not set" in text
+
+
+# The commands
+
+
+def invoke(*args: str) -> Result:
+    return CliRunner().invoke(cli.app, list(args), env={"COLUMNS": "200", "NO_COLOR": "1"})
+
+
+@respx.mock
+def test_court_init_writes_court_yaml_from_the_installed_models(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    respx.get(MODELS_URL).mock(return_value=models_response(["qwen3.5:4b"]))
+    result = invoke("init")
+    assert result.exit_code == 0, result.output
+    assert "Wrote court.yaml" in result.output
+    assert "court doctor" in result.output
+    assert load_config(tmp_path / "court.yaml").target == "ollama:qwen3.5:4b"
+
+
+@respx.mock
+def test_court_init_uses_the_defaults_when_ollama_is_offline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    respx.get(MODELS_URL).mock(side_effect=httpx.ConnectError("refused"))
+    result = invoke("init", "-c", "shop/court.yaml")
+    assert result.exit_code == 0, result.output
+    assert "can't reach Ollama at http://127.0.0.1:11434" in result.output
+    assert "uses the default models" in result.output
+    assert load_config(tmp_path / "shop" / "court.yaml").target == "ollama:llama3.1"
+
+
+@respx.mock
+def test_court_init_keeps_an_existing_court_yaml_unless_forced(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    route = respx.get(MODELS_URL).mock(return_value=models_response(ALL_MODELS))
+    (tmp_path / "court.yaml").write_text("target: openai:gpt-5\n", encoding="utf-8")
+    refused = invoke("init")
+    assert refused.exit_code == 1
+    assert "court.yaml already exists. Pass --force" in refused.output
+    assert not route.called  # it refuses before asking Ollama anything
+    assert (tmp_path / "court.yaml").read_text(encoding="utf-8") == "target: openai:gpt-5\n"
+
+    assert invoke("init", "--force").exit_code == 0
+    assert load_config(tmp_path / "court.yaml").target == "ollama:llama3.1"
+
+
+@respx.mock
+def test_court_doctor_passes_on_a_ready_laptop_without_showing_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-do-not-print")
+    respx.get(MODELS_URL).mock(return_value=models_response(ALL_MODELS))
+    result = invoke("doctor")
+    assert result.exit_code == 0, result.output
+    assert "court doctor" in result.output
+    assert "Ready for `court trial`" in result.output
+    assert "sk-test-do-not-print" not in result.output
+
+
+@respx.mock
+def test_court_doctor_fails_with_fixes_when_ollama_is_offline() -> None:
+    respx.get(MODELS_URL).mock(side_effect=httpx.ConnectError("refused"))
+    result = invoke("doctor")
+    assert result.exit_code == 1
+    assert "ollama serve" in result.output
+    assert "skipped" in result.output
+    assert "Some checks failed" in result.output
+    assert "Traceback" not in result.output
+
+
+@respx.mock
+def test_court_doctor_pull_pulls_the_missing_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    respx.get(MODELS_URL).mock(
+        side_effect=[models_response(ALL_MODELS[:3]), models_response(ALL_MODELS)]
+    )
+    fake = FakeOllamaCLI()
+    monkeypatch.setattr(
+        cli, "run_doctor", lambda pull: init_doctor.run_doctor(pull=pull, runner=fake)
+    )
+    result = invoke("doctor", "--pull")
+    assert result.exit_code == 0, result.output
+    assert fake.commands == [["ollama", "pull", "nomic-embed-text"]]

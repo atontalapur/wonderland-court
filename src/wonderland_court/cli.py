@@ -34,6 +34,14 @@ from wonderland_court.contracts import (
 )
 from wonderland_court.engine.cache import SQLiteResponseCache
 from wonderland_court.engine.defenses import parse_defenses
+from wonderland_court.engine.init_doctor import (
+    OllamaUnreachable,
+    doctor_ok,
+    doctor_table,
+    list_ollama_models,
+    run_doctor,
+    write_court_yaml,
+)
 from wonderland_court.engine.mock import MockTarget
 from wonderland_court.engine.runner import TrialResult, plan_matches, run_trial
 from wonderland_court.engine.store import CourtReader, CourtStore
@@ -103,16 +111,37 @@ def main(
 
 @app.command()
 def init(
+    config: ConfigOption = DEFAULT_CONFIG,
     force: Annotated[bool, typer.Option(help="Overwrite an existing court.yaml.")] = False,
 ) -> None:
     """Write court.yaml and find your Ollama models."""
-    _not_built("init", "Engine, #19")
+    if config.exists() and not force:
+        _fail(f"{config} already exists. Pass --force to overwrite it.")
+    installed: list[str] | None
+    try:
+        installed = list_ollama_models()
+    except OllamaUnreachable as exc:
+        installed = None
+        typer.echo(f"Note: {exc}, so court.yaml uses the default models.")
+    text = write_court_yaml(config, installed, force=True)
+    typer.echo(f"Wrote {config}:\n\n{text}")
+    typer.echo("Next: `court doctor` checks Ollama and the models, then run `court trial`.")
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    pull: Annotated[
+        bool, typer.Option(help="Run `ollama pull` for the models that are missing.")
+    ] = False,
+) -> None:
     """Check Ollama and pull the judge and guard models."""
-    _not_built("doctor", "Engine, #19")
+    checks = run_doctor(pull=pull)
+    console = Console()
+    console.print(doctor_table(checks))
+    if not doctor_ok(checks):
+        console.print("Some checks failed. Each row's Fix column says what to do.")
+        raise typer.Exit(code=1)
+    console.print("Ready for `court trial`.")
 
 
 # court trial
@@ -125,8 +154,8 @@ def _trial_settings(path: Path, *, quick: bool, mock: bool) -> CourtConfig:
     _missing(path)
     if not mock:
         _fail(
-            f"No {path} here. Write one (court init arrives with #19), or try an offline "
-            "run with `court trial --quick --mock`."
+            f"No {path} here. Write one with `court init`, or try an offline run with "
+            "`court trial --quick --mock`."
         )
     return CourtConfig.from_mapping({"target": MockTarget.name}, preset)
 
@@ -302,8 +331,8 @@ def trial(
             raise  # nothing outside Court runs in a mock trial, so this is a bug: keep the trace
         _fail(
             f"The trial stopped: {type(exc).__name__}: {exc}\n"
-            f"The run is marked failed in {settings.db_path}. Check that Ollama is running and "
-            "the models are pulled (`ollama list`); `court doctor` will check this (#19)."
+            f"The run is marked failed in {settings.db_path}. Run `court doctor` to check that "
+            "Ollama is running and the models are pulled."
         )
     console.print(
         f"\n{result.leaks} of {len(result.matches)} matches leaked. Run [bold]{result.run_id}[/]"

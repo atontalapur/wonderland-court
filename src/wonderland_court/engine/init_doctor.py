@@ -105,6 +105,7 @@ def write_court_yaml(path: Path, installed: Sequence[str] | None, *, force: bool
     if path.exists() and not force:
         raise FileExistsError(path)
     text = court_yaml_text(installed)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return text
 
