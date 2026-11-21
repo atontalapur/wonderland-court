@@ -4,26 +4,45 @@ export default {
   theme: {
     extend: {
       colors: {
-        obsidian: {
-          950: "#07090e",
-          900: "#0b0d14",
-          850: "#0f121b",
-          800: "#131722",
-          750: "#191f2e",
-          700: "#23293a",
-          600: "#313a52",
+        parchment: {
+          50: "#fffdf9",
+          100: "#faf4e8",
+          200: "#f2e7d3",
+          300: "#e4d2b4",
+          400: "#cfb489",
         },
-        crimson: {
-          500: "#e11d48",
-          600: "#be123c",
+        alice: {
+          50: "#eff6ff",
+          100: "#dbeafe",
+          200: "#bfdbfe",
+          500: "#2b5b84",
+          600: "#1e4568",
+          700: "#16344f",
+        },
+        queen: {
+          50: "#fff1f2",
+          100: "#ffe4e6",
+          500: "#c81e3a",
+          600: "#a5152e",
+          700: "#881326",
+        },
+        cheshire: {
+          50: "#f5f3ff",
+          100: "#ede9fe",
+          500: "#6d28d9",
+          600: "#5b21b6",
+        },
+        hatter: {
+          50: "#ecfdf5",
+          100: "#d1fae5",
+          500: "#047857",
+          600: "#065f46",
         },
         gold: {
-          400: "#facc15",
-          500: "#eab308",
-        },
-        emerald: {
-          400: "#34d399",
-          500: "#10b981",
+          100: "#fef3c7",
+          400: "#d97706",
+          500: "#b45309",
+          600: "#92400e",
         },
       },
       fontFamily: {
@@ -35,6 +54,7 @@ export default {
           "serif",
         ],
         sans: [
+          "Plus Jakarta Sans",
           "Inter",
           "ui-sans-serif",
           "system-ui",
@@ -51,6 +71,10 @@ export default {
           "Consolas",
           "monospace",
         ],
+      },
+      boxShadow: {
+        storybook: "0 10px 30px -12px rgba(64, 42, 18, 0.14), 0 2px 6px -1px rgba(64, 42, 18, 0.06)",
+        bubble: "0 6px 20px -6px rgba(35, 31, 26, 0.12)",
       },
     },
   },

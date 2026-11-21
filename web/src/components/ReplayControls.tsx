@@ -32,7 +32,7 @@ export function ReplayControls({
 
   return (
     <div
-      className="flex flex-wrap items-center gap-3 rounded-xl border border-[#23293a] bg-[#131722]/95 px-4 py-2.5 shadow-lg"
+      className="flex flex-wrap items-center gap-3 rounded-2xl border border-[#e4d2b4] bg-[#faf4e8] px-4 py-2.5 shadow-sm"
       data-testid="replay-controls"
     >
       <div className="flex items-center gap-1.5">
@@ -40,16 +40,16 @@ export function ReplayControls({
           type="button"
           onClick={isPlaying ? onPause : onPlay}
           aria-label={isPlaying ? "Pause replay" : "Play replay"}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[#23293a] bg-[#191f2e] px-3 py-1.5 text-xs font-semibold text-slate-100 transition hover:border-amber-400/50 hover:text-amber-300"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-[#d6be96] bg-[#fffdf9] px-3 py-1.5 text-xs font-semibold text-[#231f1a] transition hover:border-[#2b5b84] hover:text-[#2b5b84]"
         >
           {isPlaying ? (
             <>
-              <Pause className="h-3.5 w-3.5 text-amber-400" />
+              <Pause className="h-3.5 w-3.5 text-[#b45309]" />
               <span>Pause</span>
             </>
           ) : (
             <>
-              <Play className="h-3.5 w-3.5 text-emerald-400" />
+              <Play className="h-3.5 w-3.5 text-[#047857]" />
               <span>Play</span>
             </>
           )}
@@ -59,7 +59,7 @@ export function ReplayControls({
           type="button"
           onClick={onRestart}
           aria-label="Restart replay"
-          className="inline-flex items-center gap-1 rounded-lg border border-[#23293a] bg-[#191f2e] px-2.5 py-1.5 text-xs font-medium text-slate-300 transition hover:border-slate-500 hover:text-white"
+          className="inline-flex items-center gap-1 rounded-xl border border-[#e4d2b4] bg-[#fffdf9] px-2.5 py-1.5 text-xs font-medium text-[#5c4f41] transition hover:border-[#b49464] hover:text-[#231f1a]"
         >
           <RotateCcw className="h-3.5 w-3.5" />
           <span>Restart</span>
@@ -67,7 +67,7 @@ export function ReplayControls({
       </div>
 
       <div
-        className="flex items-center rounded-lg border border-[#23293a] bg-[#0b0d14] p-0.5"
+        className="flex items-center rounded-xl border border-[#e4d2b4] bg-[#fffdf9] p-0.5"
         role="group"
         aria-label="Replay speed"
       >
@@ -77,10 +77,10 @@ export function ReplayControls({
             type="button"
             onClick={() => onSpeedChange(s)}
             aria-pressed={speed === s}
-            className={`rounded-md px-2 py-1 font-mono text-xs font-medium transition ${
+            className={`rounded-lg px-2 py-1 font-mono text-xs font-semibold transition ${
               speed === s
-                ? "bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40"
-                : "text-slate-400 hover:text-slate-200"
+                ? "bg-[#2b5b84] text-white"
+                : "text-[#6b5e4e] hover:text-[#231f1a]"
             }`}
           >
             {s}x
@@ -102,17 +102,17 @@ export function ReplayControls({
           <div
             role="presentation"
             data-testid="replay-scrubber-bar"
-            className="h-2.5 w-full overflow-hidden rounded-full border border-[#23293a] bg-[#0b0d14] peer-focus-visible:ring-2 peer-focus-visible:ring-amber-400 peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-[#131722]"
+            className="h-2.5 w-full overflow-hidden rounded-full border border-[#dec8a4] bg-[#fffdf9] peer-focus-visible:ring-2 peer-focus-visible:ring-[#2b5b84]"
           >
             <div
-              className="h-full bg-gradient-to-r from-amber-500 via-rose-500 to-emerald-500 transition-all duration-150"
+              className="h-full bg-gradient-to-r from-[#2b5b84] via-[#d97706] to-[#c81e3a] transition-all duration-150"
               style={{ width: `${pct}%` }}
             />
           </div>
         </div>
 
         <span
-          className="whitespace-nowrap font-mono text-xs text-slate-300"
+          className="whitespace-nowrap font-mono text-xs font-medium text-[#5c4f41]"
           data-testid="replay-progress"
         >
           Event {cursor} / {totalEvents}
@@ -123,7 +123,7 @@ export function ReplayControls({
         <button
           type="button"
           onClick={onExitReplay}
-          className="rounded-lg border border-[#23293a] px-2.5 py-1 text-xs text-slate-400 transition hover:border-slate-500 hover:text-slate-200"
+          className="rounded-xl border border-[#dec8a4] bg-[#fffdf9] px-3 py-1 text-xs font-semibold text-[#5c4f41] transition hover:border-[#2b5b84] hover:text-[#2b5b84]"
         >
           Show Full Run
         </button>
