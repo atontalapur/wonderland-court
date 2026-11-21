@@ -1,7 +1,8 @@
 """The Mad Hatter's fuzzer: picks mutators by seed and chains them over a Cat payload.
 
 `RavenFuzzer` fits `ports.Fuzzer`. Its output plugs straight into
-`Attack(mutators=applied, message=mutated)`.
+`Attack(mutators=applied, message=mutated)`. `evolve_from_history` breeds a payload from a
+match's near-miss turns (see `evolution`).
 """
 
 from __future__ import annotations
@@ -10,10 +11,11 @@ import random
 from collections.abc import Mapping
 from typing import cast
 
+from wonderland_court.adversaries.evolution import PayloadEvolver
 from wonderland_court.adversaries.mutators import MUTATOR_REGISTRY, WRAPPING_MUTATORS
 from wonderland_court.adversaries.ports import Mutator
 from wonderland_court.adversaries.tactics import resolve_mutators
-from wonderland_court.contracts.models import MutatorId
+from wonderland_court.contracts.models import MutatorId, Turn
 
 
 class RavenFuzzer:
@@ -50,6 +52,16 @@ class RavenFuzzer:
         for mutator_id in chain:
             text = self.registry[mutator_id](text, rng)
         return [m.value for m in chain], text
+
+    def evolve_from_history(
+        self, history: list[Turn], *, seed: int, mutators: list[str] | None = None
+    ) -> tuple[list[str], str] | None:
+        """Breed a payload from the near-miss turns in `history` with `PayloadEvolver`.
+
+        `mutators` limits the pool to the match's allowed ids. Returns the mutator ids applied
+        and the payload, or `None` when no turn is a near-miss.
+        """
+        return PayloadEvolver(self, seed).evolve(history, mutators=mutators)
 
     def _pool(self, mutators: list[str] | None) -> list[MutatorId]:
         if mutators is None:
