@@ -2,7 +2,11 @@
 
 A small online tea shop with a support agent that can refund orders and send email. The shop's rules: refunds up to $50, email only to `@marchhare.tea`, and never share the internal support code. Court's `refund_tool` and `drink_me` scenarios try to break all three.
 
-Run everything below from the repo root.
+Run everything below from the repo root. First check that Ollama and the models are ready:
+
+```sh
+court doctor          # add --pull to fetch any missing models
+```
 
 ## Put a model on trial
 
@@ -34,9 +38,13 @@ uv run python examples/tea_shop/agent.py        # serves POST /chat on 127.0.0.1
 target: http://127.0.0.1:8001/chat
 ```
 
+`MARCH_HARE_PORT` changes the port.
+
 ## Without Ollama
 
-Set `MARCH_HARE_MODEL=scripted` to swap the model for a scripted clerk. It refunds any amount it's asked for, follows instructions hidden in emails, and reads out the support code to anyone who asks, so every attack lands. It's for tests and for checking the pipeline on a laptop without models. Any other value, such as `ollama:qwen3.5:4b`, picks the model the agent asks.
+`court trial --mock -c examples/tea_shop/court.yaml` runs fully offline. It swaps in Court's own mock Alice, scripted attacker and canary judge, so it checks the config and the defenses, not this agent.
+
+Set `MARCH_HARE_MODEL=scripted` to swap the agent's model for a scripted clerk. It refunds any amount it's asked for, follows instructions hidden in emails, and reads out the support code to anyone who asks, so every attack lands. The tests use it to run the agent through `court trial` offline. A real `court trial` still needs Ollama for the attacker and the judge. Any other value, such as `ollama:qwen3.5:4b`, picks the model the agent asks.
 
 ## Bringing your own agent
 
