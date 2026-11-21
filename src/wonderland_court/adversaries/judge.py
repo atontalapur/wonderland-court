@@ -37,6 +37,7 @@ from wonderland_court.contracts.models import (
 )
 
 from .decoders import CanaryMatcher
+from .llm_json import json_objects
 from .ports import ChatClient, EmbeddingClient
 from .refusals import is_refusal
 
@@ -249,21 +250,11 @@ def _reply_text(reply: TargetReply) -> str:
 # Layer 4: LLM
 
 
-def _json_objects(text: str) -> Iterator[Any]:
-    decoder = json.JSONDecoder()
-    for start in (i for i, ch in enumerate(text) if ch == "{"):
-        try:
-            value, _ = decoder.raw_decode(text, start)
-        except json.JSONDecodeError:
-            continue
-        yield value
-
-
 def parse_llm_verdict(content: str) -> tuple[Ruling, float, str] | None:
     """Pull `(ruling, confidence, reason)` out of an LLM reply, or `None` if there is no usable
     ruling. Tolerates code fences and prose around the JSON. A missing or invalid confidence
     becomes 0.5; anything else is clamped to [0, 1]."""
-    for obj in _json_objects(content):
+    for obj in json_objects(content):
         if not isinstance(obj, dict):
             continue
         raw_ruling = str(obj.get("ruling", "")).strip().casefold()

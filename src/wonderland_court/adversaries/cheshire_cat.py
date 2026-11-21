@@ -10,10 +10,8 @@ which never carries the canary.
 
 from __future__ import annotations
 
-import json
 import random
 import re
-from collections.abc import Iterator
 from typing import Any
 
 from wonderland_court.contracts.models import (
@@ -28,6 +26,7 @@ from wonderland_court.contracts.models import (
 
 from .bandit import SelectionPolicy, TechniqueBandit, WarmStart
 from .families import FAMILIES, FamilyStrategy, strategy_for
+from .llm_json import json_objects
 from .ports import ChatClient, Evolver, Fuzzer, Poisoner
 from .refusals import is_refusal, is_refusal_text
 from .tactics import resolve_families, resolve_mutators, tactic_for
@@ -95,7 +94,6 @@ _BRANCH_SYSTEM = (
 )
 _MAX_REPLY_CHARS = 1500
 _MAX_MESSAGE_CHARS = 2000
-_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
 class CheshireCat:
@@ -266,26 +264,12 @@ def _fixed_family(context: AttackContext) -> TechniqueFamily:
     return family
 
 
-def _json_objects(text: str) -> Iterator[dict[str, Any]]:
-    """JSON objects in an LLM reply, fenced blocks first, then the raw text."""
-    sources = [m.group(1) for m in _FENCE_RE.finditer(text)] + [text]
-    decoder = json.JSONDecoder()
-    for source in sources:
-        for start in (i for i, ch in enumerate(source) if ch == "{"):
-            try:
-                value, _ = decoder.raw_decode(source, start)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(value, dict):
-                yield value
-
-
 def parse_refined_message(text: str) -> str | None:
     """Pull `message` out of an LLM reply that may wrap JSON in fences or prose.
 
     Returns None when no JSON object with a non-empty string `message` is found.
     """
-    for value in _json_objects(text):
+    for value in json_objects(text):
         message = value.get("message")
         if isinstance(message, str) and message.strip():
             return message.strip()[:_MAX_MESSAGE_CHARS]
@@ -298,7 +282,7 @@ def parse_refined_candidates(text: str) -> list[str]:
     Reads the first object with a `candidates` list of strings; a lone `message`
     counts as one candidate. Returns [] when neither is found.
     """
-    for value in _json_objects(text):
+    for value in json_objects(text):
         items = value.get("candidates")
         if isinstance(items, list):
             found = [i.strip()[:_MAX_MESSAGE_CHARS] for i in items if isinstance(i, str)]
