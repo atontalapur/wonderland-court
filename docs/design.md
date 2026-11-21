@@ -68,6 +68,22 @@ Both the OpenAI and Anthropic SDKs use `httpx2`, not `httpx`, so `respx` can't i
 
 A relative `db_path` is resolved against the directory `court.yaml` is in.
 
+## Defenses
+
+A defense has a `name`, `supports(kind)` and `wrap(target) -> Target`. `DEFENSES` in `engine/defenses.py` maps each name to a factory that takes one `DefensePolicy`: the scenario's tool rules and the `DefenseModels` that model-backed defenses call. `compose_defenses("spotlighting+guard+output_filter", target, policy)` wraps the first name innermost, so the last name sees the request first and the reply last. A stack raises `ValueError` when any layer can't wrap the target's kind.
+
+| Defense | Targets | What it does | Model calls per turn |
+| --- | --- | --- | --- |
+| `plain` | model, agent | Nothing. The baseline. | 0 |
+| `sandwich` | model | Puts the user's turn and attachments between the system prompt and a reminder | 0 |
+| `input_filter` | model, agent | Blocks known injection phrases, in any encoding | 0 |
+| `output_filter` | model, agent | Blocks canary-shaped text and tool calls that break a tool rule | 0 |
+| `spotlighting` | model | Fences user turns and attachments with per-call nonce markers and datamarks attachments | 0 |
+| `guard` | model, agent | Llama Guard 3 or Granite Guardian on the way in and out. An unreadable answer blocks. | up to 2 |
+| `dual_llm` | model | A quarantined reader with no prompt, canary or tools takes notes, a policy gate checks them, and Alice answers from the notes | up to 2 |
+
+`guard_model` (default `llama-guard3:1b`) and `quarantine_model` (default: the target's own model) come from `court.yaml`. Their calls go through the shared client, so they count against the same local and remote limits as Alice. `court trial --mock` swaps in `MockDefenseModel`, a scripted classifier and reader, so every defense runs offline.
+
 ## Plugging in a component
 
 `registry.py` loads each component from a fixed module and factory. The factory is called with `config=` and `client=`:
