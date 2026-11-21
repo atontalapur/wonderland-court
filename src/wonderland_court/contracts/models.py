@@ -183,6 +183,9 @@ class Attack(Contract):
     message: str
     document: Document | None = None
     """A Drink Me document delivered alongside the message."""
+    payload: str | None = None
+    """The Cat's text before the Hatter mutated it. Set when `mutators` is not empty, so
+    evolution can breed from clean text. Alice only ever sees `message`."""
 
 
 class Verdict(Contract):
