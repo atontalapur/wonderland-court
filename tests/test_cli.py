@@ -19,6 +19,7 @@ from wonderland_court.contracts import (
     TechniqueFamily,
     parse_event,
 )
+from wonderland_court.engine import defenses
 
 runner = CliRunner()
 WIDE = {"COLUMNS": "200", "NO_COLOR": "1"}
@@ -230,15 +231,33 @@ def test_quick_mock_trial_runs_offline_and_records_the_run(
     db = tmp_path / "out" / "court.db"
     result = invoke("trial", "--quick", "--mock", "--db", str(db))
     assert result.exit_code == 0, result.output
-    assert "Skipping spotlighting: the spotlighting defense isn't built yet (#17)" in result.output
+    assert (
+        "Skipping spotlighting+guard+output_filter: the guard defense isn't built yet (#17)"
+        in result.output
+    )
     assert "Off with her head!" in result.output
-    assert "3 of 4 matches leaked" in result.output
+    assert "5 of 6 matches leaked" in result.output
 
     rows, lines = recorded(db)
     assert rows == lines and len(lines) > 0
     events = [parse_event(line) for line in lines]
     assert events[0].type == "run_started" and events[-1].type == "run_ended"
     assert not (tmp_path / ".court").exists()  # --db wins over the preset's path
+
+
+def test_trial_skips_a_stack_with_a_defense_that_is_not_built(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setitem(defenses.PLANNED, "teleport", "#99")
+    (tmp_path / "court.yaml").write_text(
+        "target: ollama:llama3.1\ndefenses: [plain, teleport+guard]\nscenarios: [vault]\n",
+        encoding="utf-8",
+    )
+    result = invoke("trial", "--mock")
+    assert result.exit_code == 0, result.output
+    assert "Skipping teleport+guard: the teleport defense isn't built yet (#99)." in result.output
+    assert "1 of 1 matches leaked" in result.output
 
 
 def test_trial_without_court_yaml_points_at_mock(

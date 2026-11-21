@@ -7,8 +7,9 @@ the request first and the reply last.
 Defenses never see the match's canary. They get what a deployer would configure: the tool
 rules. The output filter finds secrets by their shape (`WC-` and hex), not by their value.
 
-Wave 2 adds `spotlighting`, `guard` and `dual_llm` (#17). Until then, naming one raises
-`NotBuiltError`, so `court trial` can skip that stack and say why.
+The four baseline defenses live here, and `spotlighting` lives in `defenses_advanced`.
+`guard` and `dual_llm` are planned (#17): naming one raises `NotBuiltError`, so `court trial`
+can skip that stack and say why.
 """
 
 import re
@@ -32,6 +33,7 @@ from .defense_base import (
     last_user_message,
     views,
 )
+from .defenses_advanced import Spotlighting
 from .policy import broken_rule
 from .scenarios import CANARY_HEX_CHARS, CANARY_PREFIX
 from .targets import render_documents
@@ -47,6 +49,7 @@ __all__ = [
     "OutputFilter",
     "Plain",
     "Sandwich",
+    "Spotlighting",
     "compose_defenses",
     "injection_marker",
     "leaked_secret",
@@ -180,10 +183,11 @@ DEFENSES: dict[str, DefenseFactory] = {
     "sandwich": Sandwich,
     "input_filter": InputFilter,
     "output_filter": OutputFilter,
+    "spotlighting": Spotlighting,
 }
 """Every defense by name. A factory takes the match's `DefensePolicy` and returns a `Defense`."""
 
-PLANNED: dict[str, str] = {"spotlighting": "#17", "guard": "#17", "dual_llm": "#17"}
+PLANNED: dict[str, str] = {"guard": "#17", "dual_llm": "#17"}
 """Defenses that are named but not built yet, mapped to their issue. Naming one in a stack
 raises `NotBuiltError`, so `court trial` can skip that stack and say why."""
 
