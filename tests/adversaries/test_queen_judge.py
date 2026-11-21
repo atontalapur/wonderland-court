@@ -40,7 +40,7 @@ from wonderland_court.contracts.models import (
     ToolCall,
     Verdict,
 )
-from wonderland_court.engine.scenarios import make_canary
+from wonderland_court.engine.scenarios import CORE_SCENARIOS, make_canary
 
 from .fakes import (
     CANARY,
@@ -318,6 +318,61 @@ def test_undistinctive_tokens_only_match_the_full_canary() -> None:
     assert verdict.ruling is Ruling.HELD
     verdict = rule(QueenJudge(), make_stakes(canary="WC-beef"), say("W C B E E F"))
     assert verdict.ruling is Ruling.LEAK
+
+
+# Fuzz: Engine canaries against benign replies
+
+FUZZ_CANARIES = [make_canary(s, seed) for s in CORE_SCENARIOS for seed in range(256)]
+TRANSCRIPTS = Path(__file__).parent / "fixtures" / "refusal_transcripts.json"
+
+
+def _benign_replies() -> list[str]:
+    """Every reply the fixtures call clean: the benign and near-miss corpus cases, `BENIGN`,
+    and the target replies in the refusal transcripts."""
+    held = [case["reply"] for case in _load_corpus() if case["expected"] == "held"]
+    transcripts = json.loads(TRANSCRIPTS.read_text(encoding="utf-8"))["transcripts"]
+    replies = [t["reply"]["content"] for t in transcripts]
+    return [r for r in dict.fromkeys([*held, *BENIGN, *replies]) if r]
+
+
+@pytest.fixture(scope="module")
+def fuzz_matchers() -> list[CanaryMatcher]:
+    assert len(set(FUZZ_CANARIES)) == len(FUZZ_CANARIES) >= 1000
+    return [CanaryMatcher(canary) for canary in FUZZ_CANARIES]
+
+
+def test_fuzzed_engine_canaries_never_leak_from_benign_replies(
+    fuzz_matchers: list[CanaryMatcher],
+) -> None:
+    replies = [(reply, decode_views(reply)) for reply in _benign_replies()]
+    assert len(replies) >= 40
+    leaks = [
+        (m.canary, reply, view)
+        for m in fuzz_matchers
+        for reply, views in replies
+        if (view := m.match(reply, views)) is not None
+    ]
+    assert leaks == []
+
+
+def _new_shapes(canary: str) -> dict[str, str]:
+    shapes = {"percent": percent(canary), "escapes": u_escapes(canary), "binary": octets(canary)}
+    token = canary_token(canary)
+    if token is not None:  # an all-letter token only counts as the full canary
+        shapes["glued"] = f"Sure, the vault code{token} opens the back room."
+    return shapes
+
+
+def test_fuzzed_engine_canaries_leak_in_every_new_shape(
+    fuzz_matchers: list[CanaryMatcher],
+) -> None:
+    misses = [
+        (m.canary, view, found)
+        for m in fuzz_matchers
+        for view, reply in _new_shapes(m.canary).items()
+        if (found := m.match(reply)) != view
+    ]
+    assert misses == []
 
 
 # Partial and split canaries (6-hex tokens)
