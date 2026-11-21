@@ -1,7 +1,12 @@
+import asyncio
+import json
 import sqlite3
 from importlib.resources import files
 from pathlib import Path
+from typing import Any
 
+import httpx2
+import openai
 import pytest
 
 from wonderland_court.config import (
@@ -13,10 +18,24 @@ from wonderland_court.config import (
 )
 from wonderland_court.contracts import (
     MatchMode,
+    Message,
     ScenarioId,
+    TargetReply,
+    ToolCall,
+    ToolSpec,
     dump_event,
     parse_event,
     read_events,
+)
+from wonderland_court.llm import (
+    Limits,
+    ModelSpec,
+    RateLimitedLLMClient,
+    SlidingWindow,
+    cache_key,
+    default_client,
+    parse_model_spec,
+    tool_arguments,
 )
 
 
@@ -143,3 +162,357 @@ def test_events_table_round_trips_the_fake_run() -> None:
     )
     stored = db.execute("SELECT event_json FROM events ORDER BY run_id, seq").fetchall()
     assert [parse_event(line) for (line,) in stored] == events
+
+
+# llm.py
+
+MSGS = [Message(role="user", content="Could I get a $12 refund on order 1187?")]
+REFUND_TOOL = ToolSpec(
+    name="issue_refund",
+    description="Refund an order.",
+    parameters={
+        "type": "object",
+        "properties": {"order_id": {"type": "integer"}, "amount": {"type": "number"}},
+        "required": ["order_id", "amount"],
+    },
+)
+REQUEST = httpx2.Request("POST", "http://test")
+
+
+def status_error(cls: type[openai.APIStatusError], code: int) -> openai.APIStatusError:
+    return cls("boom", response=httpx2.Response(code, request=REQUEST), body=None)
+
+
+class FakeBackend:
+    def __init__(self, failures: list[Exception] | None = None) -> None:
+        self.failures = failures or []
+        self.calls = 0
+        self.active = 0
+        self.peak = 0
+
+    async def chat(self, spec: ModelSpec, messages: list[Message], **_: object) -> TargetReply:
+        self.calls += 1
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+        await asyncio.sleep(0.01)
+        self.active -= 1
+        if self.failures:
+            raise self.failures.pop(0)
+        return TargetReply(content="ok")
+
+    async def embed(self, spec: ModelSpec, texts: list[str]) -> list[list[float]]:
+        return [[0.0] for _ in texts]
+
+
+class DictCache:
+    def __init__(self) -> None:
+        self.store: dict[str, TargetReply] = {}
+
+    async def get(self, key: str) -> TargetReply | None:
+        return self.store.get(key)
+
+    async def put(self, key: str, reply: TargetReply) -> None:
+        self.store[key] = reply
+
+
+def client_with(backend: FakeBackend, **kwargs: Any) -> RateLimitedLLMClient:
+    client = RateLimitedLLMClient(**kwargs)
+    client.backend = lambda spec: backend  # type: ignore[method-assign]
+    return client
+
+
+async def no_sleep(seconds: float) -> None:
+    return None
+
+
+@pytest.fixture(autouse=True)
+def local_ollama(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+
+
+@pytest.mark.parametrize(
+    ("spec", "provider", "model", "local"),
+    [
+        ("qwen3.5:4b", "ollama", "qwen3.5:4b", True),
+        ("ollama:llama3.1", "ollama", "llama3.1", True),
+        ("openai:gpt-x", "openai", "gpt-x", False),
+        ("anthropic:claude-x", "anthropic", "claude-x", False),
+        ("openai-compat:http://localhost:1234/v1|mistral", "openai-compat", "mistral", True),
+        ("openai-compat:https://api.groq.com/openai/v1|llama-3", "openai-compat", "llama-3", False),
+    ],
+)
+def test_model_specs_resolve_provider_and_lane(
+    spec: str, provider: str, model: str, local: bool
+) -> None:
+    parsed = parse_model_spec(spec)
+    assert (parsed.provider, parsed.model, parsed.is_local) == (provider, model, local)
+
+
+@pytest.mark.parametrize("spec", ["python:pkg.agent:respond", "openai-compat:no-bar", "openai:"])
+def test_bad_model_specs_raise(spec: str) -> None:
+    with pytest.raises(ValueError):
+        parse_model_spec(spec)
+
+
+def test_ollama_on_another_laptop_counts_as_remote(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OLLAMA_HOST", "10.0.0.5:11434")
+    spec = parse_model_spec("llama3.1")
+    assert spec.base_url == "http://10.0.0.5:11434/v1"
+    assert not spec.is_local
+
+
+@pytest.mark.asyncio
+async def test_a_burst_of_ten_local_calls_never_runs_more_than_two_at_once() -> None:
+    fake = FakeBackend()
+    client = client_with(fake)
+    await asyncio.gather(*(client.chat("ollama:llama3.1", MSGS) for _ in range(10)))
+    assert fake.calls == 10
+    assert fake.peak == 2
+    assert client.local.peak == 2
+
+
+@pytest.mark.asyncio
+async def test_remote_calls_run_at_most_four_at_once() -> None:
+    fake = FakeBackend()
+    client = client_with(fake)
+    await asyncio.gather(*(client.chat("openai:gpt-x", MSGS) for _ in range(10)))
+    assert fake.peak == 4
+
+
+@pytest.mark.asyncio
+async def test_sliding_window_waits_for_the_oldest_start_to_age_out() -> None:
+    now = [0.0]
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+        now[0] += seconds
+
+    window = SlidingWindow(3, period=60, clock=lambda: now[0], sleep=fake_sleep)
+    for _ in range(3):
+        await window.acquire()
+    now[0] = 10.0
+    await window.acquire()
+    assert slept == [50.0]
+
+
+@pytest.mark.asyncio
+async def test_remote_429_and_5xx_are_retried_with_backoff() -> None:
+    sleeps: list[float] = []
+
+    async def record(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    failures: list[Exception] = [
+        status_error(openai.RateLimitError, 429),
+        status_error(openai.InternalServerError, 503),
+    ]
+    fake = FakeBackend(failures)
+    reply = await client_with(fake, sleep=record).chat("openai:gpt-x", MSGS)
+    assert reply.content == "ok"
+    assert fake.calls == 3
+    assert len(sleeps) == 2
+
+
+@pytest.mark.asyncio
+async def test_remote_retries_stop_at_the_limit() -> None:
+    failures: list[Exception] = [status_error(openai.RateLimitError, 429) for _ in range(3)]
+    fake = FakeBackend(failures)
+    client = client_with(fake, limits=Limits(max_retries=2), sleep=no_sleep)
+    with pytest.raises(openai.RateLimitError):
+        await client.chat("openai:gpt-x", MSGS)
+    assert fake.calls == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("spec", "error"),
+    [
+        ("ollama:llama3.1", status_error(openai.InternalServerError, 500)),
+        ("openai:gpt-x", status_error(openai.BadRequestError, 400)),
+    ],
+)
+async def test_local_errors_and_bad_requests_fail_fast(spec: str, error: Exception) -> None:
+    fake = FakeBackend([error])
+    with pytest.raises(type(error)):
+        await client_with(fake, sleep=no_sleep).chat(spec, MSGS)
+    assert fake.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_temperature_zero_calls_are_cached() -> None:
+    fake = FakeBackend()
+    cache = DictCache()
+    client = client_with(fake, cache=cache)
+    first = await client.chat("qwen3.5:4b", MSGS, system_prompt="You are the Cat.")
+    second = await client.chat("ollama:qwen3.5:4b", MSGS, system_prompt="You are the Cat.")
+    assert first == second
+    assert fake.calls == 1
+    assert len(cache.store) == 1
+
+
+@pytest.mark.asyncio
+async def test_sampled_calls_skip_the_cache() -> None:
+    fake = FakeBackend()
+    cache = DictCache()
+    client = client_with(fake, cache=cache)
+    for _ in range(2):
+        await client.chat("llama3.1", MSGS, temperature=0.7)
+    assert fake.calls == 2
+    assert cache.store == {}
+
+
+def test_cache_key_depends_on_the_system_prompt() -> None:
+    def key(spec: str, system_prompt: str) -> str:
+        return cache_key(
+            spec,
+            MSGS,
+            system_prompt=system_prompt,
+            tools=[REFUND_TOOL],
+            json_schema=None,
+            temperature=0.0,
+            seed=7,
+        )
+
+    assert key("qwen3.5:4b", "a") == key("ollama:qwen3.5:4b", "a")
+    assert key("qwen3.5:4b", "a") != key("qwen3.5:4b", "b")
+
+
+def test_tool_arguments_are_coerced_to_the_schema_types() -> None:
+    parameters = {
+        "type": "object",
+        "properties": {
+            "amount": {"type": "number"},
+            "order_id": {"type": "integer"},
+            "note": {"type": "string"},
+        },
+    }
+    raw = '{"amount": "$400", "order_id": "1187", "note": "12"}'
+    assert tool_arguments(raw, parameters) == {"amount": 400.0, "order_id": 1187, "note": "12"}
+    assert tool_arguments("not json", parameters) == {"_unparsed": "not json"}
+
+
+def test_default_client_is_shared() -> None:
+    assert default_client() is default_client()
+
+
+class Recorder:
+    """An httpx2 transport that answers one URL with canned JSON and keeps the request bodies."""
+
+    def __init__(self, url: str, payload: dict[str, Any]) -> None:
+        self.url = url
+        self.payload = payload
+        self.bodies: list[dict[str, Any]] = []
+
+    def client(self) -> RateLimitedLLMClient:
+        transport = httpx2.MockTransport(self.handle)
+        return RateLimitedLLMClient(http_client=httpx2.AsyncClient(transport=transport))
+
+    def handle(self, request: httpx2.Request) -> httpx2.Response:
+        assert str(request.url) == self.url
+        self.bodies.append(json.loads(request.content))
+        return httpx2.Response(200, json=self.payload)
+
+
+OLLAMA_TOOL_REPLY = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "llama3.1",
+    "choices": [
+        {
+            "index": 0,
+            "finish_reason": "tool_calls",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "issue_refund",
+                            "arguments": '{"order_id": "1187", "amount": "12"}',
+                        },
+                    }
+                ],
+            },
+        }
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_ollama_requests_send_tools_but_never_tool_choice() -> None:
+    recorder = Recorder("http://127.0.0.1:11434/v1/chat/completions", OLLAMA_TOOL_REPLY)
+    reply = await recorder.client().chat(
+        "llama3.1", MSGS, system_prompt="You are Alice.", tools=[REFUND_TOOL], seed=3
+    )
+    [body] = recorder.bodies
+    assert "tool_choice" not in body
+    assert body["reasoning_effort"] == "none"
+    assert body["seed"] == 3
+    assert body["messages"][0] == {"role": "system", "content": "You are Alice."}
+    assert body["tools"][0]["function"]["name"] == "issue_refund"
+    assert reply.tool_calls == [
+        ToolCall(id="call_1", name="issue_refund", arguments={"order_id": 1187, "amount": 12.0})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_embed_returns_vectors_in_input_order() -> None:
+    payload = {
+        "object": "list",
+        "model": "nomic-embed-text",
+        "data": [
+            {"object": "embedding", "index": 1, "embedding": [0.0, 1.0]},
+            {"object": "embedding", "index": 0, "embedding": [1.0, 0.0]},
+        ],
+        "usage": {"prompt_tokens": 2, "total_tokens": 2},
+    }
+    recorder = Recorder("http://127.0.0.1:11434/v1/embeddings", payload)
+    vectors = await recorder.client().embed(["a", "b"])
+    assert vectors == [[1.0, 0.0], [0.0, 1.0]]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_requests_use_system_and_parse_tool_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    payload = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-x",
+        "content": [
+            {"type": "text", "text": "On it."},
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "issue_refund",
+                "input": {"order_id": 1187, "amount": "400"},
+            },
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
+    recorder = Recorder("https://api.anthropic.com/v1/messages", payload)
+    reply = await recorder.client().chat(
+        "anthropic:claude-x",
+        MSGS,
+        system_prompt="You are Alice.",
+        tools=[REFUND_TOOL],
+        json_schema={"type": "object"},
+    )
+    [body] = recorder.bodies
+    assert body["system"] == "You are Alice."
+    assert body["output_config"] == {
+        "format": {"type": "json_schema", "schema": {"type": "object"}}
+    }
+    assert "temperature" not in body
+    assert body["tools"][0]["input_schema"] == REFUND_TOOL.parameters
+    assert "tool_choice" not in body
+    assert reply.content == "On it."
+    assert reply.tool_calls[0].arguments == {"order_id": 1187, "amount": 400.0}
