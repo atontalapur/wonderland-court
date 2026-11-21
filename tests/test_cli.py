@@ -26,7 +26,7 @@ WIDE = {"COLUMNS": "200", "NO_COLOR": "1"}
 FAKE_RUN = Path(__file__).resolve().parents[1] / "fixtures" / "fake_run.jsonl"
 
 COMMANDS = ["init", "doctor", "trial", "serve", "report", "ci", "advise", "retrial"]
-STUBS = ["init", "doctor", "ci", "retrial"]
+STUBS = ["init", "doctor", "ci"]
 
 
 def invoke(*args: str) -> Result:
@@ -126,6 +126,105 @@ def test_advise_on_a_model_run_says_when_the_models_fail(
     assert result.exit_code == 1
     assert "court advise stopped: ConnectionError: Ollama isn't answering" in result.output
     assert "Traceback" not in result.output
+
+
+def runs(db: Path) -> list[tuple[str, str | None, str]]:
+    """`(run_id, parent_run_id, status)` for every run, oldest first."""
+    with sqlite3.connect(db) as connection:
+        rows = connection.execute(
+            "SELECT run_id, parent_run_id, status FROM runs ORDER BY created_at, run_id"
+        )
+        return list(rows.fetchall())
+
+
+def test_retrial_replays_the_baseline_seeds_with_the_hardened_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    db = tmp_path / ".court" / "court.db"
+    assert invoke("trial", "--quick", "--mock").exit_code == 0
+    assert invoke("advise").exit_code == 0
+    [(baseline, _, _)] = runs(db)
+
+    unbuilt = invoke("retrial")
+    assert unbuilt.exit_code == 1
+    assert "court retrial: the spotlighting defense isn't built yet (#17)" in unbuilt.output
+    assert len(runs(db)) == 1  # refused before a retrial run started
+
+    (tmp_path / "court.hardened.yaml").write_text('defenses:\n  - "input_filter+output_filter"\n')
+    result = invoke("retrial")
+    assert result.exit_code == 0, result.output
+    assert f"Retrying run {baseline} on the same seeds with input_filter+output_filter" in (
+        result.output
+    )
+    assert "-75 pts" in result.output
+    assert "Utility (Dodo pass rate)" in result.output
+
+    [_, (retried, parent, status)] = runs(db)
+    assert (parent, status) == (baseline, "finished")
+    with sqlite3.connect(db) as connection:
+        [(seeds, before, after, delta)] = connection.execute(
+            "SELECT matched_seeds_json, baseline_asr, retrial_asr, asr_delta "
+            "FROM retrial_comparisons WHERE retrial_run_id = ? AND baseline_run_id = ?",
+            (retried, baseline),
+        ).fetchall()
+        baseline_seeds = connection.execute(
+            "SELECT seed FROM matches WHERE run_id = ?", (baseline,)
+        ).fetchall()
+    assert sorted(json.loads(seeds)) == sorted(seed for (seed,) in baseline_seeds)
+    assert (before, after, delta) == (0.75, 0.0, -0.75)
+
+    again = invoke("retrial")  # the latest run is a retrial, so the baseline is retried again
+    assert again.exit_code == 0, again.output
+    assert runs(db)[-1][1] == baseline
+
+
+def test_retrial_needs_a_hardened_config_and_a_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    missing = invoke("retrial")
+    assert missing.exit_code == 1
+    assert "No hardened config at court.hardened.yaml. Run `court advise` first." in (
+        missing.output
+    )
+
+    (tmp_path / "court.hardened.yaml").write_text("defenses: [output_filter]\n")
+    no_runs = invoke("retrial")
+    assert no_runs.exit_code == 1
+    assert "No runs in .court/court.db yet" in no_runs.output
+
+    (tmp_path / "two.yaml").write_text("defenses: [plain, output_filter]\n")
+    two = invoke("retrial", "--hardened", "two.yaml")
+    assert two.exit_code == 2
+    assert "should list exactly one defense stack" in two.output
+    assert "Traceback" not in missing.output + no_runs.output + two.output
+
+
+def test_a_retrial_on_models_that_fails_says_why_without_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Unreachable:
+        name = "ollama:llama3.1"
+        kind = TargetKind.MODEL
+
+        async def respond(self, request: TargetRequest) -> TargetReply:
+            raise ConnectionError("Ollama isn't answering on 127.0.0.1:11434")
+
+    monkeypatch.chdir(tmp_path)
+    db = tmp_path / ".court" / "court.db"
+    assert invoke("trial", "--mock").exit_code == 0
+    with sqlite3.connect(db) as connection:
+        connection.execute("UPDATE runs SET target = 'ollama:llama3.1'")
+    (tmp_path / "court.hardened.yaml").write_text("defenses: [output_filter]\n")
+    monkeypatch.setattr(cli, "build_target", lambda spec, client: Unreachable())
+    monkeypatch.setattr(registry, "load_attacker", lambda c, client: registry.ScriptedAttacker())
+    monkeypatch.setattr(registry, "load_judge", lambda c, client: registry.CanaryJudge())
+    result = invoke("retrial")
+    assert result.exit_code == 1
+    assert "The retrial stopped: ConnectionError: Ollama isn't answering" in result.output
+    assert "Traceback" not in result.output
+    assert [status for _, _, status in runs(db)] == ["finished", "failed"]
 
 
 # serve and report, from the Courtroom track (#42)
@@ -365,7 +464,9 @@ def test_bad_court_yaml_is_a_usage_error(
     assert message in result.output
 
 
-@pytest.mark.parametrize("args", [["trial", "--mock"], ["advise"], ["report"], ["serve"]])
+@pytest.mark.parametrize(
+    "args", [["trial", "--mock"], ["advise"], ["retrial"], ["report"], ["serve"]]
+)
 def test_an_explicit_config_that_is_missing_is_a_usage_error(
     args: list[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

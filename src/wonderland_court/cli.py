@@ -1,8 +1,8 @@
 """The `court` command line.
 
-`court trial` runs here. `serve`, `report` and `advise` reach their track's code through the
-registry, so those tracks never edit this file; until a track lands, its command says so and
-exits 1. The remaining stubs name the issue that builds them.
+`court trial` runs here. `serve`, `report`, `advise` and `retrial` reach their track's code
+through the registry, so those tracks never edit this file; until a track lands, its command
+says so and exits 1. The remaining stubs name the issue that builds them.
 """
 
 import asyncio
@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
+import yaml
 from rich.console import Console
 from rich.markup import escape
 from rich.progress import Progress
@@ -41,6 +42,7 @@ from wonderland_court.engine.store import (
     CourtReader,
     CourtStore,
     RemediationAdvice,
+    RetrialComparison,
     RunRecord,
 )
 from wonderland_court.engine.targets import build_target, canonical_spec
@@ -511,12 +513,132 @@ def advise(
     _print_advice(Console(), advice, record, path)
 
 
+def _hardened_defense(path: Path) -> str:
+    """The one defense stack in a `court advise` patch."""
+    if not path.is_file():
+        _fail(f"No hardened config at {path}. Run `court advise` first.")
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        _fail(f"can't read {path}: {exc}", code=2)
+    defenses = data.get("defenses") if isinstance(data, dict) else None
+    if not (isinstance(defenses, list) and len(defenses) == 1 and isinstance(defenses[0], str)):
+        _fail(f"{path} should list exactly one defense stack under `defenses:`.", code=2)
+    return defenses[0]
+
+
+async def _retrial(
+    remediator: registry.Remediator,
+    db_path: Path,
+    baseline: RunRecord,
+    defense: str,
+    console: Console,
+) -> RetrialComparison:
+    """Replay `baseline` behind `defense` with the target, models and settings it ran with."""
+    config = CourtConfig.model_validate(baseline.config)
+    async with CourtStore(db_path, jsonl_dir=db_path.parent / "runs") as store:
+        target: Target
+        attacker: Attacker
+        judge: Judge
+        if baseline.target == MockTarget.name:
+            client = default_client()
+            target, attacker, judge = (
+                MockTarget(),
+                registry.ScriptedAttacker(),
+                registry.CanaryJudge(),
+            )
+        else:
+            if not isinstance(config.target, str):
+                raise ValueError("retrying an agent target needs agent targets (#19)")
+            client = RateLimitedLLMClient(cache=SQLiteResponseCache(store))
+            set_default_client(client)
+            target = build_target(config.target, client)
+            attacker = registry.load_attacker(config, client)
+            judge = registry.load_judge(config, client)
+        utility = registry.load_utility_evaluator(config, client)
+        total = len(await store.get_matches(baseline.run_id))
+        with Progress(console=console, transient=True) as progress:
+            return await remediator.retrial(
+                store,
+                baseline.run_id,
+                defense=defense,
+                target=target,
+                attacker=attacker,
+                judge=judge,
+                utility=utility,
+                on_event=_Reporter(progress, total),
+            )
+
+
+def _share(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.0%}"
+
+
+def _print_retrial(console: Console, comparison: RetrialComparison, defense: str) -> None:
+    table = Table(
+        title=escape(
+            f"Retrial {comparison.retrial_run_id} of {comparison.baseline_run_id}, same seeds"
+        )
+    )
+    for column in ("Scenario", "Matches", "Attack success before", "After", "Change"):
+        table.add_column(column)
+    for scenario, diff in sorted(comparison.per_scenario.items()):
+        table.add_row(
+            escape(scenario),
+            str(diff["paired"]),
+            _share(diff["baseline_asr"]),
+            _share(diff["retrial_asr"]),
+            f"{diff['asr_delta'] * 100:+.0f} pts",
+        )
+    table.add_row(
+        "all",
+        str(len(comparison.matched_seeds)),
+        _share(comparison.baseline_asr),
+        _share(comparison.retrial_asr),
+        f"{comparison.asr_delta * 100:+.0f} pts",
+        style="bold",
+    )
+    console.print(table)
+    console.print(
+        f"Utility (Dodo pass rate): {_share(comparison.baseline_utility)} before, "
+        f"{_share(comparison.retrial_utility)} after, with {escape(defense)}."
+    )
+
+
 @app.command()
 def retrial(
-    run: Annotated[str | None, typer.Option(help="Run id. Defaults to the latest run.")] = None,
+    config: ConfigOption = DEFAULT_CONFIG,
+    run: Annotated[
+        str | None,
+        typer.Option(help="Baseline run id. Defaults to the latest run that isn't a retrial."),
+    ] = None,
+    hardened: HardenedOption = None,
+    db: DbOption = None,
 ) -> None:
     """Re-run the same seeds against the hardened config."""
-    _not_built("retrial", "Adversaries, #24")
+    console = Console()
+    remediator = _remediator(_settings(config), "retrial")
+    db_path = _db_path(db, config)
+    path = _hardened_path(hardened, config)
+    defense = _hardened_defense(path)
+    baseline = _run_or_fail(db_path, run, retrials=False)
+    console.print(
+        escape(f"Retrying run {baseline.run_id} on the same seeds with {defense} ({path}).")
+    )
+    try:
+        comparison = asyncio.run(_retrial(remediator, db_path, baseline, defense, console))
+    except registry.NotBuiltError as exc:
+        _fail(f"court retrial: {exc}. Edit {path} to a stack that runs today.")
+    except (LookupError, ValueError) as exc:
+        _fail(f"court retrial: {exc}")
+    except Exception as exc:
+        if baseline.target == MockTarget.name:
+            raise  # nothing outside Court runs in a mock retrial, so this is a bug
+        _fail(
+            f"The retrial stopped: {type(exc).__name__}: {exc}\n"
+            f"The retrial run is marked failed in {db_path}. {CHECK_MODELS}"
+        )
+    _print_retrial(console, comparison, defense)
 
 
 @app.command(hidden=True)
