@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from wonderland_court.contracts.models import (
     Document,
@@ -20,6 +20,7 @@ from wonderland_court.contracts.models import (
     ScenarioId,
     TargetReply,
     ToolSpec,
+    Turn,
 )
 
 Mutator = Callable[[str, random.Random], str]
@@ -76,6 +77,15 @@ class Fuzzer(Protocol):
         mutators: list[str] | None = None,
         chain_len: int = 1,
     ) -> tuple[list[str], str]: ...
+
+
+@runtime_checkable
+class Evolver(Protocol):
+    """A fuzzer that can also breed a payload from a match's near-miss turns."""
+
+    def evolve_from_history(
+        self, history: list[Turn], *, seed: int, mutators: list[str] | None = None
+    ) -> tuple[list[str], str] | None: ...
 
 
 class Poisoner(Protocol):

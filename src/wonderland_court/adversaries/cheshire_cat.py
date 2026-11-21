@@ -28,7 +28,7 @@ from wonderland_court.contracts.models import (
 
 from .bandit import SelectionPolicy, TechniqueBandit, WarmStart
 from .families import FAMILIES, FamilyStrategy, strategy_for
-from .ports import ChatClient, Fuzzer, Poisoner
+from .ports import ChatClient, Evolver, Fuzzer, Poisoner
 from .refusals import is_refusal, is_refusal_text
 from .tactics import resolve_families, resolve_mutators, tactic_for
 
@@ -135,7 +135,21 @@ class CheshireCat:
         strategy = strategy_for(family)
         tactic = tactic_for(family)
 
-        message = await self._compose(context, strategy, rng)
+        # A fuzzer that can evolve breeds this family's next payload from its near-misses;
+        # otherwise the template or refiner writes it and the Hatter mutates it below.
+        evolved: tuple[list[str], str] | None = None
+        family_history = [t for t in context.history if t.attack.family == family.value]
+        if isinstance(self._fuzzer, Evolver) and family_history:
+            evolved = self._fuzzer.evolve_from_history(
+                family_history,
+                seed=rng.randrange(2**31),
+                mutators=[m.value for m in resolve_mutators(context.enabled_mutators)],
+            )
+        if evolved is not None:
+            applied, message = evolved
+        else:
+            applied = []
+            message = await self._compose(context, strategy, rng)
 
         document: Document | None = None
         if tactic.needs_document:
@@ -150,8 +164,7 @@ class CheshireCat:
             else:
                 message = f"{message}\n\n--- forwarded message ---\n{hidden}"
 
-        applied: list[str] = []
-        if self._fuzzer is not None:
+        if evolved is None and self._fuzzer is not None:
             allowed = set(resolve_mutators(context.enabled_mutators))
             wanted = [m.value for m in tactic.suggested_mutators if m in allowed]
             if wanted:

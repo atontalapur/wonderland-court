@@ -8,6 +8,10 @@ from .bandit import (
     UCB1Policy,
     WarmStart,
 )
+from .calibration import (
+    CalibrationResult,
+    calibrate,
+)
 from .cheshire_cat import CheshireCat
 from .decoders import decode_views
 from .dodo import (
@@ -20,6 +24,7 @@ from .drink_me import (
     DrinkMeGenerator,
     HidingStyle,
 )
+from .evolution import PayloadEvolver
 from .families import (
     FAMILIES,
     FamilyStrategy,
@@ -31,6 +36,11 @@ from .mutators import (
     WRAPPING_MUTATORS,
 )
 from .raven import RavenFuzzer
+from .run_view import (
+    MatchRecord,
+    load_matches,
+    matches_from_events,
+)
 from .tactics import (
     DEFAULT_MUTATORS,
     DEFAULT_TECHNIQUE_FAMILIES,
@@ -56,6 +66,7 @@ __all__ = [
     "TACTIC_CATALOG",
     "WRAPPING_MUTATORS",
     "ArmStats",
+    "CalibrationResult",
     "CheshireCat",
     "DodoEvaluator",
     "DodoResult",
@@ -63,6 +74,8 @@ __all__ = [
     "DrinkMeGenerator",
     "FamilyStrategy",
     "HidingStyle",
+    "MatchRecord",
+    "PayloadEvolver",
     "QueenJudge",
     "RavenFuzzer",
     "SelectionPolicy",
@@ -71,8 +84,11 @@ __all__ = [
     "ThompsonPolicy",
     "UCB1Policy",
     "WarmStart",
+    "calibrate",
     "decode_views",
     "evaluate_all",
+    "load_matches",
+    "matches_from_events",
     "register_family",
     "resolve_families",
     "resolve_mutators",
