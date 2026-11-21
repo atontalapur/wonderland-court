@@ -572,8 +572,6 @@ def context(scenario: ScenarioId, turn: int) -> AttackContext:
         (registry.load_judge, registry.CanaryJudge),
         (registry.load_utility_evaluator, registry.UnknownUtility),
         (registry.load_remediator, registry.NotBuilt),
-        (registry.load_server_runner, registry.NotBuilt),
-        (registry.load_report_renderer, registry.NotBuilt),
     ],
 )
 def test_missing_components_fall_back_to_fakes_with_a_warning(
@@ -592,6 +590,14 @@ def test_missing_components_fall_back_to_fakes_with_a_warning(
     assert isinstance(component, fake_type)
     assert component.fake is True
     assert "isn't built yet" in caplog.text
+
+
+def test_courtroom_components_load_real_implementations() -> None:
+    client = default_client()
+    server_runner = registry.load_server_runner(CONFIG, client)
+    report_renderer = registry.load_report_renderer(CONFIG, client)
+    assert not getattr(server_runner, "fake", False)
+    assert not getattr(report_renderer, "fake", False)
 
 
 def test_a_real_component_replaces_the_fake(monkeypatch: pytest.MonkeyPatch) -> None:

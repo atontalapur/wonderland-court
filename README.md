@@ -25,6 +25,60 @@ You point Wonderland Court at an AI model or agent. A cast of *Alice in Wonderla
 
 Wonderland Court runs locally on **Ollama**, so testing costs nothing and your prompts, secrets, and data never leave your machine. It also supports remote model APIs and custom HTTP or Python agents.
 
+## Quickstart
+
+```bash
+pipx install git+https://github.com/atontalapur/wonderland-court
+
+# Inspect a recorded trial immediately at 4x speed (zero Ollama required)
+court serve --replay fixtures/fake_run.jsonl --speed 4.0
+
+# Or export reports (HTML, Markdown, JSON, GitHub Code Scanning SARIF 2.1.0)
+court report --format html --input fixtures/fake_run.jsonl --out report.html
+court report --format sarif --input fixtures/fake_run.jsonl --out results.sarif
+```
+
+Full end-to-end CLI flow (with local dev setup via `uv`):
+
+```bash
+uv sync --locked
+# Hydrate the SQLite WAL DB from recorded artifacts (or omit --hydrate-from-jsonl to run live on Ollama)
+uv run python scripts/run_local_ollama_trial.py --hydrate-from-jsonl
+uv run court serve --db .court/local_ollama_demo.db --port 8000
+uv run court report --format html --db .court/local_ollama_demo.db --out docs/benchmark/report.html
+```
+
+## How Wonderland Court compares
+
+| Tool | Focus | Defense tournament | Utility cost | Verified fix |
+| --- | --- | --- | --- | --- |
+| garak (NVIDIA) | Broad probe scans from CLI | No | No | No |
+| PyRIT (Microsoft) | Adaptive multi-turn campaigns | No | No | No |
+| promptfoo | YAML config, CI-friendly | No | No | No |
+| DeepTeam | Fits the DeepEval ecosystem | No | No | No |
+| **Wonderland Court** | **Agents with tools, on your own model** | **Yes (Elo + 95% CI)** | **Yes (Dodo)** | **Yes (Caterpillar)** |
+
+## Live Local Ollama Benchmark (`qwen2.5:7b-instruct`)
+
+Measured locally on Apple M2 Max (`ollama:qwen2.5:7b-instruct`, 8 adaptive matches across `refund_tool` & `vault`, seeds `101–108`; see [benchmark_summary.md](./docs/benchmark/benchmark_summary.md)):
+
+| Defense Stack | Elo | Attack Success (95% CI) | Mean Turns to Break | Dodo Utility |
+| --- | ---: | --- | ---: | ---: |
+| `spotlighting+output_filter` | `1583.8` | **`0.0%`** (`0.0%–65.8%`) | Held | `100.0%` |
+| `spotlighting` | `1488.2` | `100.0%` (`34.2%–100%`) | `1.50` | `100.0%` |
+| `sandwich` | `1464.8` | `100.0%` (`34.2%–100%`) | `1.00` | `100.0%` |
+| `plain` | `1463.3` | `100.0%` (`34.2%–100%`) | `1.00` | `100.0%` |
+
+- **Judge Calibration:** `62.5%` agreement (`5/8`, 1 FP / 2 FN) between blind LLM judge and exact Canary/Tool-Call ground truth—showing why deterministic checks run first.
+- **Seed-Locked Retrial:** Applying Caterpillar's recommended `spotlighting+output_filter` stack dropped aggregate ASR from **`75.0%` → `0.0%` (`-75.0` pp)** on identical seeds while keeping **Dodo Utility at `100.0%`**.
+
+> *Scope Note: Single-model local verification run (`n = 2` matches per defense stack on `qwen2.5:7b-instruct`); see [benchmark_summary.md](./docs/benchmark/benchmark_summary.md) for the full 3-laptop multi-model sweep plan.*
+
+## Courtroom Architecture
+
+- **Read-Only Live Server (`src/wonderland_court/courtroom/`):** FastAPI opens SQLite strictly in read-only WAL mode (`?mode=ro`), tails `events` via SSE (`seq > last_seq`), enforces `120 req/min` & `3 concurrent SSE streams` per IP, and serves the compiled React + Vite UI directly from inside the Python wheel (`courtroom/static/`).
+- **Dashboard (`web/`):** Live Courtroom Feed (*"Off with her head!"* verdicts, Drink Me previews, tactic switches), Elo + 95% Wilson CI Leaderboard, Security-vs-Utility Pareto plot, Defense × Technique Heatmap with transcript drill-down, Judge Calibration badge, Caterpillar clusters & Retrial Diff, and 1x/2x/4x Replay Mode + GitHub Pages static archive build.
+
 ## To-do: production-grade test targets
 
 Stand-ins so Court can be tested beyond fixtures. Prefer **free hosted APIs** (no local weight downloads) so one laptop is not pulling every model. Local Ollama stays optional for offline demos.
