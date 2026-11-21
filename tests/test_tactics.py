@@ -1,5 +1,7 @@
 """Catalog of selectable Cat / Hatter / Drink Me tactics."""
 
+from typing import cast
+
 import pytest
 
 from wonderland_court.adversaries import (
@@ -88,7 +90,7 @@ def test_resolve_mutators_defaults_and_filters() -> None:
 
 def test_resolve_mutators_rejects_unknown() -> None:
     with pytest.raises(ValueError, match="Unknown mutators"):
-        resolve_mutators([MutatorId.BASE64, "not_a_mutator"])  # type: ignore[list-item]
+        resolve_mutators(cast(list[MutatorId], [MutatorId.BASE64, "not_a_mutator"]))
 
 
 def test_match_spec_and_attack_context_accept_enabled_tactics() -> None:

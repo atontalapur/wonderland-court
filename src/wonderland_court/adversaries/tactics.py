@@ -190,6 +190,10 @@ def tactics_for(role: AdversaryRole) -> tuple[TacticSpec, ...]:
     return tuple(tactic for tactic in TACTIC_CATALOG if role in tactic.owners)
 
 
+def _label(value: TechniqueFamily | MutatorId | str) -> str:
+    return value.value if isinstance(value, (TechniqueFamily, MutatorId)) else str(value)
+
+
 def resolve_families(
     selected: list[TechniqueFamily] | None,
 ) -> tuple[TechniqueFamily, ...]:
@@ -198,7 +202,7 @@ def resolve_families(
         return DEFAULT_TECHNIQUE_FAMILIES
     unknown = [family for family in selected if family not in _TACTICS_BY_FAMILY]
     if unknown:
-        names = ", ".join(family.value for family in unknown)
+        names = ", ".join(_label(family) for family in unknown)
         raise ValueError(f"Unknown technique families: {names}")
     return tuple(selected)
 
@@ -210,8 +214,6 @@ def resolve_mutators(selected: list[MutatorId] | None) -> tuple[MutatorId, ...]:
     allowed = set(DEFAULT_MUTATORS)
     unknown = [mutator for mutator in selected if mutator not in allowed]
     if unknown:
-        names = ", ".join(
-            mutator.value if isinstance(mutator, MutatorId) else str(mutator) for mutator in unknown
-        )
+        names = ", ".join(_label(mutator) for mutator in unknown)
         raise ValueError(f"Unknown mutators: {names}")
     return tuple(selected)
