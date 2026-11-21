@@ -26,8 +26,9 @@ CREATE TABLE IF NOT EXISTS events (
     PRIMARY KEY (run_id, seq)
 );
 
+-- Match ids are unique within a run, not across runs: a retrial reuses them.
 CREATE TABLE IF NOT EXISTS matches (
-    match_id TEXT PRIMARY KEY,
+    match_id TEXT NOT NULL,
     run_id TEXT NOT NULL,
     round INTEGER,
     target TEXT,
@@ -40,9 +41,9 @@ CREATE TABLE IF NOT EXISTS matches (
     broken INTEGER,
     turns INTEGER,
     broken_on_turn INTEGER,
-    breaking_family TEXT
+    breaking_family TEXT,
+    PRIMARY KEY (run_id, match_id)
 );
-CREATE INDEX IF NOT EXISTS matches_by_run ON matches (run_id);
 
 CREATE TABLE IF NOT EXISTS standings (
     run_id TEXT NOT NULL,

@@ -152,6 +152,16 @@ def test_schema_turns_on_wal_for_a_file_database(tmp_path: Path) -> None:
     db.close()
 
 
+def test_two_runs_can_reuse_match_ids() -> None:
+    db = sqlite3.connect(":memory:")
+    db.executescript(SCHEMA)
+    insert = "INSERT INTO matches (match_id, run_id) VALUES (?, ?)"
+    db.execute(insert, ("m01", "baseline"))
+    db.execute(insert, ("m01", "retrial"))
+    with pytest.raises(sqlite3.IntegrityError):
+        db.execute(insert, ("m01", "retrial"))
+
+
 def test_events_table_round_trips_the_fake_run() -> None:
     db = sqlite3.connect(":memory:")
     db.executescript(SCHEMA)
