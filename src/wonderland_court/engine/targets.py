@@ -7,6 +7,8 @@ a `ModelTarget`, renders attached documents into the conversation, recovers tool
 local models write as JSON text, and times each call.
 
 Nothing here forces a tool call. Ollama's `/v1` has no `tool_choice`, so no request sets it.
+Provider prefixes and tool argument coercion come from `wonderland_court.llm`, so a target id
+and a tool call mean the same thing here as they do to the client.
 """
 
 import json
@@ -24,6 +26,13 @@ from wonderland_court.contracts import (
     TargetRequest,
     ToolCall,
     ToolSpec,
+)
+from wonderland_court.llm import (
+    AGENT_PREFIXES,
+    PROVIDERS,
+    default_client,
+    parse_model_spec,
+    tool_arguments,
 )
 
 
@@ -44,9 +53,6 @@ class ChatClient(Protocol):
 
 
 # Target ids
-
-MODEL_PREFIXES = ("ollama", "openai", "anthropic", "openai-compat")
-AGENT_PREFIXES = ("python", "http", "https")
 
 _USAGE = (
     "Use ollama:<model> or a bare Ollama model name, openai:<model>, anthropic:<model>, "
@@ -69,6 +75,8 @@ def canonical_spec(spec: str) -> str:
         raise ValueError(f"Empty target spec. {_USAGE}")
     head, _, rest = spec.partition(":")
     prefix = head.lower()
+    if prefix in PROVIDERS:
+        spec = f"{prefix}:{rest}"
 
     if prefix in AGENT_PREFIXES:
         raise ValueError(
@@ -82,18 +90,18 @@ def canonical_spec(spec: str) -> str:
                 f"{spec!r} should look like openai-compat:<base_url>|<model>, such as "
                 "openai-compat:http://localhost:1234/v1|qwen2.5-7b-instruct."
             )
-        return f"{prefix}:{base_url}|{model}"
+        return parse_model_spec(spec).canonical
     if prefix in ("openai", "anthropic"):
         if not _NO_SPACES.fullmatch(rest):
             raise ValueError(f"{spec!r} has no model name. Expected {prefix}:<model>.")
-        return f"{prefix}:{rest}"
+        return parse_model_spec(spec).canonical
 
     model = rest if prefix == "ollama" else spec
     if not model:
         raise ValueError(f"{spec!r} has no model name. Expected ollama:<model>.")
     if not _OLLAMA_MODEL.fullmatch(model):
         raise ValueError(f"{spec!r} is not a model target Court knows. {_USAGE}")
-    return f"ollama:{model}"
+    return parse_model_spec(f"ollama:{model}").canonical
 
 
 # Documents
@@ -144,14 +152,17 @@ def parse_tool_calls(content: str, tools: Sequence[ToolSpec]) -> list[ToolCall]:
     Local models over Ollama's `/v1` often do this. JSON can sit anywhere in the content, fenced
     or bare, as one call or a list. A call looks like `{"name": ..., "arguments": {...}}`, uses
     `parameters` for the arguments, or is wrapped in `{"function": {...}}`. Only names in
-    `tools` count. Ids are `call-1`, `call-2` and so on, in order of appearance.
+    `tools` count. Arguments are coerced to the tool's schema types, as for native calls, so
+    `"amount": "400"` becomes `400.0`. Ids are `call-1`, `call-2` and so on, in order of
+    appearance.
     """
-    allowed = {tool.name for tool in tools}
+    schemas = {tool.name: tool.parameters for tool in tools}
     calls: list[ToolCall] = []
     for value in _json_values(content):
         for name, arguments in _calls_in(value):
-            if name in allowed:
-                calls.append(ToolCall(id=f"call-{len(calls) + 1}", name=name, arguments=arguments))
+            if name in schemas:
+                coerced = tool_arguments(json.dumps(arguments), schemas[name])
+                calls.append(ToolCall(id=f"call-{len(calls) + 1}", name=name, arguments=coerced))
     return calls
 
 
@@ -205,13 +216,13 @@ class ModelTarget:
     def __init__(
         self,
         spec: str,
-        llm: ChatClient,
+        llm: ChatClient | None = None,
         *,
         temperature: float = 0.0,
         seed: int | None = None,
     ) -> None:
         self.name = canonical_spec(spec)
-        self._llm = llm
+        self._llm: ChatClient = llm or default_client()
         self._temperature = temperature
         self._seed = seed
 
@@ -240,7 +251,7 @@ class ModelTarget:
 
 def build_target(
     spec: str,
-    llm: ChatClient,
+    llm: ChatClient | None = None,
     *,
     temperature: float = 0.0,
     seed: int | None = None,

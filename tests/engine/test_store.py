@@ -30,7 +30,7 @@ from wonderland_court.contracts import (
     dump_event,
     parse_event,
 )
-from wonderland_court.engine.cache import ResponseCache, SQLiteResponseCache
+from wonderland_court.engine.cache import SQLiteResponseCache
 from wonderland_court.engine.store import (
     CourtReader,
     CourtStore,
@@ -41,6 +41,7 @@ from wonderland_court.engine.store import (
     RunRecord,
     UtilityResult,
 )
+from wonderland_court.llm import ResponseCache
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "fixtures" / "fake_run.jsonl"

@@ -26,6 +26,7 @@ from wonderland_court.engine.targets import (
     parse_tool_calls,
     render_documents,
 )
+from wonderland_court.llm import RateLimitedLLMClient
 
 
 class FakeClient:
@@ -314,6 +315,19 @@ def test_fallback_call_breaks_the_refund_rule() -> None:
     assert call.name == rule.tool
     assert rule.max_value is not None
     assert call.arguments[rule.argument] > rule.max_value
+
+
+def test_fallback_coerces_arguments_like_native_calls() -> None:
+    # llama3.1 often writes numbers as strings; the Queen compares them against max_value.
+    args = {"order_id": "1187", "amount": "$400", "reason": "arrived cold"}
+    (call,) = parse_tool_calls(call_json("issue_refund", args), TOOLS)
+    assert call.arguments == {"order_id": "1187", "amount": 400.0, "reason": "arrived cold"}
+
+
+def test_the_shared_client_is_a_chat_client() -> None:
+    client: ChatClient = RateLimitedLLMClient()
+    assert ModelTarget("llama3.1", client).name == "ollama:llama3.1"
+    assert ModelTarget("llama3.1").name == "ollama:llama3.1"  # defaults to default_client()
 
 
 @pytest.mark.parametrize(
