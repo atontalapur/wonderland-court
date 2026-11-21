@@ -1,3 +1,5 @@
+import sqlite3
+from importlib.resources import files
 from pathlib import Path
 
 import pytest
@@ -9,7 +11,13 @@ from wonderland_court.config import (
     HttpTargetConfig,
     load_config,
 )
-from wonderland_court.contracts import MatchMode, ScenarioId
+from wonderland_court.contracts import (
+    MatchMode,
+    ScenarioId,
+    dump_event,
+    parse_event,
+    read_events,
+)
 
 
 def write(tmp_path: Path, text: str) -> Path:
@@ -87,3 +95,51 @@ def test_bad_configs_name_the_file_and_the_problem(
     with pytest.raises(ConfigError, match=expected) as caught:
         load_config(write(tmp_path, text))
     assert "court.yaml" in str(caught.value)
+
+
+# engine/schema.sql
+
+SCHEMA = files("wonderland_court.engine").joinpath("schema.sql").read_text(encoding="utf-8")
+TABLES = {
+    "runs",
+    "events",
+    "matches",
+    "standings",
+    "utility_results",
+    "judge_calibration",
+    "remediation_advice",
+    "retrial_comparisons",
+    "llm_cache",
+}
+
+
+def table_names(db: sqlite3.Connection) -> set[str]:
+    rows = db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    return {name for (name,) in rows}
+
+
+def test_schema_creates_all_nine_tables_and_can_be_reapplied() -> None:
+    db = sqlite3.connect(":memory:")
+    db.executescript(SCHEMA)
+    db.executescript(SCHEMA)
+    assert table_names(db) == TABLES
+    assert db.execute("PRAGMA foreign_keys").fetchone() == (1,)
+
+
+def test_schema_turns_on_wal_for_a_file_database(tmp_path: Path) -> None:
+    db = sqlite3.connect(tmp_path / "court.db")
+    db.executescript(SCHEMA)
+    assert db.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+    db.close()
+
+
+def test_events_table_round_trips_the_fake_run() -> None:
+    db = sqlite3.connect(":memory:")
+    db.executescript(SCHEMA)
+    events = list(read_events(Path(__file__).parents[1] / "fixtures" / "fake_run.jsonl"))
+    db.executemany(
+        "INSERT INTO events (seq, run_id, ts, type, event_json) VALUES (?, ?, ?, ?, ?)",
+        [(e.seq, e.run_id, e.ts.isoformat(), e.type, dump_event(e)) for e in events],
+    )
+    stored = db.execute("SELECT event_json FROM events ORDER BY run_id, seq").fetchall()
+    assert [parse_event(line) for (line,) in stored] == events
