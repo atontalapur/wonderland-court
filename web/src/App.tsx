@@ -20,6 +20,9 @@ import { TranscriptDrawer } from "./components/TranscriptDrawer";
 import { aggregateEvents } from "./state/streamAggregator";
 import type { HealthResponse, RunBundle, RunSummary } from "./types/events";
 
+/** How often a live dashboard re-reads `/api/runs` to find runs that started after it loaded. */
+export const LIVE_RUNS_POLL_MS = 3000;
+
 interface DrawerState {
   isOpen: boolean;
   title: string;
@@ -30,6 +33,7 @@ interface DrawerState {
 export function App() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [runPinned, setRunPinned] = useState<boolean>(false);
   const [bundle, setBundle] = useState<RunBundle | null>(null);
   const [healthMode, setHealthMode] = useState<"live" | "replay" | "static">(
     isStaticMode() ? "static" : "live"
@@ -96,6 +100,31 @@ export function App() {
       cancelled = true;
     };
   }, []);
+
+  // A live Courtroom is often opened before `court trial` starts, or while an older run is
+  // on screen. Keep re-reading the run list and follow the newest run until the user picks one.
+  useEffect(() => {
+    if (loading || healthMode !== "live") return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const manifest = await fetchRuns();
+        if (cancelled) return;
+        setRuns(manifest.runs);
+        const newest = manifest.default_run_id ?? manifest.runs[0]?.run_id;
+        if (!runPinned && newest) setSelectedRunId(newest);
+      } catch {
+        // Keep the list we have; the next poll tries again.
+      }
+      if (!cancelled) timer = window.setTimeout(poll, LIVE_RUNS_POLL_MS);
+    };
+    timer = window.setTimeout(poll, LIVE_RUNS_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [loading, healthMode, runPinned]);
 
   // Load bundle whenever selectedRunId changes
   useEffect(() => {
@@ -196,6 +225,7 @@ export function App() {
       onSelectRun={(id) => {
         setSelectedMatchId(null);
         setDrawer((d) => ({ ...d, isOpen: false }));
+        setRunPinned(true);
         setSelectedRunId(id);
       }}
       connectionMode={
