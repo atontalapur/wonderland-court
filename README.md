@@ -27,12 +27,35 @@ Wonderland Court runs locally on **Ollama**, so testing costs nothing and your p
 
 ## To-do: production-grade test targets
 
-Stand-ins to create or find so Court can be tested beyond fixtures:
+Stand-ins to create or find so Court can be tested beyond fixtures. Baseline ladder first, then production archetypes that show up in real agent deployments (tool gateways, RAG, MCP, multi-agent, sandboxed execution).
 
-- [ ] **Dumb echo target** — blindly follows instructions; exercises **injection resistance**
-- [ ] **Mid-tier tool agent** — system prompt + refund/lookup tools; exercises **tool gating**
-- [ ] **RAG-backed target** — retrieves from a fake knowledge base; exercises **retrieval safety**
-- [ ] **Stubborn target** — refuses or hedges by default; exercises **refusal robustness** (and Dodo utility)
+### Baseline ladder
+
+- [ ] **Dumb echo target** — returns or obeys any instruction with no policy layer; exercises **injection resistance** (can the defense stack stop a target that wants to comply?)
+- [ ] **Mid-tier tool agent** — system prompt plus a couple of tools (e.g. refund, order lookup); exercises **tool gating** and policy on dangerous arguments
+- [ ] **RAG-backed target** — retrieves chunks from a fake knowledge base into context; exercises **retrieval safety** / indirect injection via poisoned docs
+- [ ] **Stubborn target** — refuses or hedges by default; exercises **refusal robustness** and **Dodo utility** (safe ≠ mute)
+
+### Conversation, memory, and identity
+
+- [ ] **Multi-turn conversational agent** — keeps session state across turns so attacks can warm up then pivot; exercises **multi-turn injection resistance** and adaptive-attacker defense
+- [ ] **Memory / long-context agent** — persists notes, prefs, or a long transcript that later turns re-read; exercises **memory poisoning** and **context isolation**
+- [ ] **Authenticated / RBAC agent** — acts as a user with roles (customer vs manager); exercises **authorization boundaries** and cross-tenant / privilege-escalation misuse
+
+### Tools, data, and side effects
+
+- [ ] **External API / third-party agent** — calls fake payment, email, CRM, or calendar APIs; exercises **egress control**, argument validation, and irreversible side-effect gating
+- [ ] **File / code-execution agent** — read/write files or run sandboxed code; exercises **path traversal**, **sandbox escape**, and dangerous-tool allowlists
+- [ ] **Browser / RPA agent** — navigates pages or automates UI flows; exercises **untrusted-page injection** and action confirmation for high-risk clicks
+- [ ] **MCP / tool-catalog agent** — discovers tools from descriptions (incl. poisoned schemas); exercises **MCP tool-poisoning** defenses and tool allow-listing
+- [ ] **Email / ticket inbox agent** — summarizes and acts on untrusted customer mail; exercises **indirect injection** (Drink Me) and domain-scoped send/refund rules
+
+### Multi-agent and modalities
+
+- [ ] **Multi-agent orchestration** — planner + specialist agents passing messages; exercises **cross-agent prompt injection**, trust boundaries, and tainted A2A/peer context
+- [ ] **Human-in-the-loop agent** — high-risk actions need approval; exercises **approval bypass** and whether injection can skip or forge consent
+- [ ] **Voice / multimodal agent** — STT/TTS or image/doc inputs in the loop; exercises **cross-modal injection** (hidden text in speech/OCR) and output filtering
+- [ ] **Streaming / async agent** — partial tokens or background jobs before a final verdict; exercises **early side effects** and whether defenses hold mid-stream
 
 ## More details
 
