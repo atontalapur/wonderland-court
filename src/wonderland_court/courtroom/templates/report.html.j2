@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Wonderland Court Report — {{ bundle.summary.run_id }}</title>
+  <style>
+    :root {
+      --bg: #fbf8f3;
+      --surface: #ffffff;
+      --surface-alt: #f4efe6;
+      --ink: #1e1b18;
+      --muted: #665e54;
+      --border: #dfd6c7;
+      --accent: #9b1c31;
+      --accent-soft: #fae8ec;
+      --teal: #116466;
+      --teal-soft: #e3f3f2;
+      --amber: #a85d00;
+      --amber-soft: #fdf1df;
+      --danger: #a61b2b;
+      --danger-soft: #fde8eb;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --serif: Georgia, "Times New Roman", serif;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      line-height: 1.55;
+      font-size: 15px;
+    }
+
+    .container {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 4rem;
+    }
+
+    header.masthead {
+      border-bottom: 2px solid var(--ink);
+      padding-bottom: 1.25rem;
+      margin-bottom: 1.75rem;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 1rem;
+    }
+
+    .kicker {
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 0.25rem;
+    }
+
+    h1 {
+      font-family: var(--serif);
+      font-size: 2rem;
+      margin: 0;
+      line-height: 1.15;
+    }
+
+    .meta-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .pill {
+      display: inline-block;
+      padding: 0.25rem 0.65rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--ink);
+      font-family: var(--mono);
+    }
+
+    .pill.status-completed {
+      background: var(--teal-soft);
+      border-color: #b7dedc;
+      color: var(--teal);
+    }
+
+    .pill.status-running {
+      background: var(--amber-soft);
+      border-color: #f0d3a8;
+      color: var(--amber);
+    }
+
+    h2 {
+      font-family: var(--serif);
+      font-size: 1.35rem;
+      margin: 2rem 0 0.85rem;
+      padding-bottom: 0.35rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 0.9rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.1rem;
+    }
+
+    .card-label {
+      font-size: 0.76rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .card-value {
+      font-family: var(--serif);
+      font-size: 1.7rem;
+      font-weight: 700;
+      margin: 0.2rem 0 0.15rem;
+    }
+
+    .card-sub {
+      font-size: 0.82rem;
+      color: var(--muted);
+      font-family: var(--mono);
+      word-break: break-word;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.1rem 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    th,
+    td {
+      padding: 0.65rem 0.8rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--surface-alt);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    .mono {
+      font-family: var(--mono);
+      font-size: 0.84rem;
+    }
+
+    .num {
+      font-family: var(--mono);
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .heat-cell {
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      text-align: center;
+      border-radius: 4px;
+      padding: 0.35rem 0.5rem;
+      font-weight: 600;
+    }
+
+    .heat-none {
+      color: var(--muted);
+      background: var(--surface-alt);
+    }
+
+    .heat-zero {
+      background: var(--teal-soft);
+      color: var(--teal);
+    }
+
+    .heat-low {
+      background: var(--amber-soft);
+      color: var(--amber);
+    }
+
+    .heat-high {
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      font-weight: 700;
+    }
+
+    .badge-leak {
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+
+    .badge-held {
+      background: var(--teal-soft);
+      color: var(--teal);
+    }
+
+    .badge-owasp {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    pre {
+      background: #1d1b18;
+      color: #f6f1e9;
+      padding: 0.9rem 1rem;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    details.transcript {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 0.85rem;
+      overflow: hidden;
+    }
+
+    details.transcript summary {
+      cursor: pointer;
+      padding: 0.8rem 1rem;
+      background: var(--surface-alt);
+      font-weight: 600;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    .transcript-body {
+      padding: 1rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .turn-box {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.85rem;
+      margin-bottom: 0.75rem;
+      background: #fcfaf6;
+    }
+
+    .turn-header {
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+      font-size: 0.84rem;
+      font-weight: 700;
+    }
+
+    .msg-block {
+      margin: 0.45rem 0;
+    }
+
+    .msg-label {
+      font-size: 0.74rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .msg-text {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.55rem 0.75rem;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin-top: 0.2rem;
+    }
+
+    .doc-box {
+      border-left: 3px solid var(--accent);
+      background: var(--accent-soft);
+      padding: 0.6rem 0.85rem;
+      border-radius: 0 6px 6px 0;
+      margin: 0.5rem 0;
+    }
+
+    footer {
+      margin-top: 2.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.82rem;
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="masthead">
+      <div>
+        <div class="kicker">Wonderland Court &bull; Red-Team Trial Verdict</div>
+        <h1>Trial Dossier: <span class="mono">{{ bundle.summary.run_id }}</span></h1>
+      </div>
+      <div class="meta-pills">
+        <span class="pill status-{{ bundle.summary.status }}">{{ bundle.summary.status }}</span>
+        <span class="pill">mode={{ bundle.summary.mode.value }}</span>
+        <span class="pill">source={{ bundle.summary.source }}</span>
+        <span class="pill">config={{ target_config_path }}</span>
+      </div>
+    </header>
+
+    <section aria-label="Executive Verdict">
+      <div class="cards">
+        <div class="card">
+          <div class="card-label">Overall Attack Success</div>
+          <div class="card-value">{{ "%.1f"|format(overall_asr * 100) }}%</div>
+          <div class="card-sub">{{ bundle.summary.leaks }} leaks / {{ bundle.summary.matches }} matches</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Leading Defense</div>
+          {% if best_standing %}
+          <div class="card-value" style="font-size: 1.25rem;">{{ best_standing.defense }}</div>
+          <div class="card-sub">
+            Elo {{ "%.1f"|format(best_standing.elo) }} &bull; ASR {{ "%.1f"|format(best_standing.attack_success * 100) }}%
+            {% if best_standing.utility is not none %}
+              &bull; Utility {{ "%.1f"|format(best_standing.utility * 100) }}%
+            {% endif %}
+          </div>
+          {% else %}
+          <div class="card-value">—</div>
+          <div class="card-sub">No standings recorded</div>
+          {% endif %}
+        </div>
+        <div class="card">
+          <div class="card-label">Targets Tested</div>
+          <div class="card-value">{{ bundle.summary.targets|length }}</div>
+          <div class="card-sub">{{ bundle.summary.targets|join(", ") }}</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Scenarios &amp; Rounds</div>
+          <div class="card-value">{{ bundle.summary.scenarios|length }} &times; {{ bundle.summary.rounds }}</div>
+          <div class="card-sub">{{ bundle.summary.scenarios|map(attribute="value")|join(", ") }}</div>
+        </div>
+      </div>
+    </section>
+
+    <section aria-label="Leaderboard">
+      <h2>&#9824; Defense Leaderboard</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Defense Stack</th>
+              <th class="num">Elo</th>
+              <th class="num">Matches</th>
+              <th class="num">Attack Success</th>
+              <th class="num">95% Wilson CI</th>
+              <th class="num">Mean Turns-to-Break</th>
+              <th class="num">Dodo Utility</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in bundle.standings %}
+            <tr>
+              <td class="mono">{{ row.defense }}</td>
+              <td class="num">{{ "%.1f"|format(row.elo) }}</td>
+              <td class="num">{{ row.matches }}</td>
+              <td class="num">{{ "%.1f"|format(row.attack_success * 100) }}%</td>
+              <td class="num">[{{ "%.1f"|format(row.ci_low * 100) }}%, {{ "%.1f"|format(row.ci_high * 100) }}%]</td>
+              <td class="num">
+                {% if row.mean_turns_to_break is not none %}{{ "%.2f"|format(row.mean_turns_to_break) }}{% else %}&mdash;{% endif %}
+              </td>
+              <td class="num">
+                {% if row.utility is not none %}{{ "%.1f"|format(row.utility * 100) }}%{% else %}&mdash;{% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7">No standings available.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section aria-label="Defense by Technique Heatmap">
+      <h2>&#9827; Defense &times; Technique Heatmap</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Defense</th>
+              {% for fam in bundle.heatmap.families %}
+              <th style="text-align: center;" class="mono">{{ fam }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for def_row in heatmap_rows %}
+            <tr>
+              <td class="mono">{{ def_row.defense }}</td>
+              {% for cell in def_row.cells %}
+              <td>
+                {% if cell.matches == 0 %}
+                <div class="heat-cell heat-none">&mdash;</div>
+                {% else %}
+                <div class="heat-cell {{ cell.css_class }}" title="{{ cell.tooltip }}">
+                  {{ cell.leaks }}/{{ cell.matches }} ({{ "%.0f"|format(cell.asr * 100) }}%)
+                </div>
+                {% endif %}
+              </td>
+              {% endfor %}
+            </tr>
+            {% else %}
+            <tr><td colspan="{{ 1 + bundle.heatmap.families|length }}">No heatmap cells recorded.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    {% if bundle.calibration %}
+    <section aria-label="Judge Calibration">
+      <h2>&#9829; Queen of Hearts Judge Calibration</h2>
+      <div class="cards">
+        <div class="card">
+          <div class="card-label">Agreement Rate</div>
+          <div class="card-value">{{ "%.1f"|format(bundle.calibration.agreement_rate * 100) }}%</div>
+          <div class="card-sub">{{ bundle.calibration.agreement_count }} / {{ bundle.calibration.llm_evaluated }} LLM-evaluated turns</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Exact Checks</div>
+          <div class="card-value">{{ bundle.calibration.total_exact_checked }}</div>
+          <div class="card-sub">Canary / tool-rule ground truth</div>
+        </div>
+        <div class="card">
+          <div class="card-label">False Positives</div>
+          <div class="card-value">{{ bundle.calibration.false_positives }}</div>
+          <div class="card-sub">LLM flagged leak where exact held</div>
+        </div>
+        <div class="card">
+          <div class="card-label">False Negatives</div>
+          <div class="card-value">{{ bundle.calibration.false_negatives }}</div>
+          <div class="card-sub">LLM missed exact ground-truth leak</div>
+        </div>
+      </div>
+    </section>
+    {% endif %}
+
+    {% if bundle.advice %}
+    <section aria-label="Caterpillar Remediation Advice">
+      <h2>&#9830; Advice from a Caterpillar</h2>
+      <div class="panel">
+        <p><strong>Recommended Defense Stack:</strong> <span class="mono">{{ bundle.advice.recommended_defense }}</span> (target kind: <span class="mono">{{ bundle.advice.target_kind }}</span>)</p>
+        <p>{{ bundle.advice.rationale }}</p>
+        {% if bundle.advice.config_patch_yaml %}
+        <div class="msg-label">Hardened Config Patch (YAML)</div>
+        <pre><code>{{ bundle.advice.config_patch_yaml }}</code></pre>
+        {% endif %}
+      </div>
+
+      {% if bundle.advice.clusters %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Cluster</th>
+              <th>OWASP / Scenario</th>
+              <th>Technique</th>
+              <th class="num">Count</th>
+              <th>Example Matches</th>
+              <th>Root Cause Summary</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for cl in bundle.advice.clusters %}
+            <tr>
+              <td>
+                <div class="mono">{{ cl.cluster_id }}</div>
+                <div><strong>{{ cl.family_label }}</strong></div>
+              </td>
+              <td>
+                <span class="badge badge-owasp">{{ scenario_rule_ids.get(cl.scenario.value, cl.scenario.value) }}</span>
+                <div class="mono">{{ cl.scenario.value }}</div>
+              </td>
+              <td class="mono">{{ cl.technique_family }}</td>
+              <td class="num">{{ cl.count }}</td>
+              <td class="mono">{{ cl.example_match_ids|join(", ") }}</td>
+              <td>{{ cl.root_cause_summary }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {% if bundle.retrial %}
+    <section aria-label="Retrial Comparison">
+      <h2>&#9824; Retrial Before &amp; After Comparison</h2>
+      <div class="cards">
+        <div class="card">
+          <div class="card-label">Attack Success Delta</div>
+          <div class="card-value">{{ "%+.1f"|format(bundle.retrial.asr_delta * 100) }} pp</div>
+          <div class="card-sub">
+            {{ "%.1f"|format(bundle.retrial.baseline_asr * 100) }}% &rarr; {{ "%.1f"|format(bundle.retrial.retrial_asr * 100) }}%
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-label">Matched Seeds</div>
+          <div class="card-value">{{ bundle.retrial.matched_seeds|length }}</div>
+          <div class="card-sub">{{ bundle.retrial.matched_seeds|join(", ") }}</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Baseline vs Retrial Run</div>
+          <div class="card-value" style="font-size: 1rem;">{{ bundle.retrial.baseline_run_id }}</div>
+          <div class="card-sub">&rarr; {{ bundle.retrial.retrial_run_id }}</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Dodo Utility Shift</div>
+          {% if bundle.retrial.baseline_utility is not none and bundle.retrial.retrial_utility is not none %}
+          <div class="card-value">{{ "%.1f"|format(bundle.retrial.retrial_utility * 100) }}%</div>
+          <div class="card-sub">from {{ "%.1f"|format(bundle.retrial.baseline_utility * 100) }}%</div>
+          {% else %}
+          <div class="card-value">&mdash;</div>
+          <div class="card-sub">Utility not measured</div>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if bundle.retrial.per_scenario_diff %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Scenario</th>
+              <th class="num">Baseline ASR</th>
+              <th class="num">Retrial ASR</th>
+              <th class="num">Delta</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for scen, stats in bundle.retrial.per_scenario_diff|dictsort %}
+            <tr>
+              <td class="mono">{{ scen }}</td>
+              <td class="num">{{ "%.1f"|format((stats.get("baseline_asr", 0.0)) * 100) }}%</td>
+              <td class="num">{{ "%.1f"|format((stats.get("retrial_asr", 0.0)) * 100) }}%</td>
+              <td class="num">{{ "%+.1f"|format((stats.get("asr_delta", stats.get("retrial_asr", 0.0) - stats.get("baseline_asr", 0.0))) * 100) }} pp</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    <section aria-label="Leak Transcripts">
+      <h2>&#9829; Leak Transcripts ({{ broken_matches|length }})</h2>
+      {% if not broken_matches %}
+      <div class="panel">No leaks occurred during this trial. All defenses held.</div>
+      {% endif %}
+      {% for tr in broken_matches %}
+      <details class="transcript">
+        <summary>
+          <span class="badge badge-leak">LEAK</span>
+          <span class="mono">{{ tr.match.match_id }}</span>
+          <span class="mono">{{ tr.match.defense }}</span>
+          <span class="badge badge-owasp">{{ scenario_rule_ids.get(tr.match.scenario.value, tr.match.scenario.value) }}</span>
+          <span class="mono">scenario={{ tr.match.scenario.value }}</span>
+          <span class="mono">broken_turn={{ tr.broken_on_turn }}</span>
+          <span class="mono">family={{ tr.breaking_family or "unknown" }}</span>
+          <span class="mono">seed={{ tr.match.seed }}</span>
+        </summary>
+        <div class="transcript-body">
+          <p><strong>Objective:</strong> {{ tr.stakes.objective }}</p>
+          {% for turn in tr.turns %}
+          <div class="turn-box">
+            <div class="turn-header">
+              <span>Turn {{ turn.index }} &bull; <span class="mono">{{ turn.attack.family }}</span>{% if turn.attack.mutators %} (mutators: <span class="mono">{{ turn.attack.mutators|join(", ") }}</span>){% endif %}</span>
+              <span>
+                {% if turn.verdict.ruling.value == "leak" %}
+                <span class="badge badge-leak">LEAK ({{ turn.verdict.layer.value }}, {{ "%.0f"|format(turn.verdict.confidence * 100) }}%)</span>
+                {% else %}
+                <span class="badge badge-held">HELD ({{ turn.verdict.layer.value }}, {{ "%.0f"|format(turn.verdict.confidence * 100) }}%)</span>
+                {% endif %}
+              </span>
+            </div>
+            <div class="msg-block">
+              <div class="msg-label">Cheshire Cat Attack</div>
+              <div class="msg-text">{{ turn.attack.message }}</div>
+            </div>
+            {% if turn.attack.document %}
+            <div class="doc-box">
+              <div class="msg-label">
+                Drink Me {{ turn.attack.document.kind }} &bull; {{ turn.attack.document.title }} ({{ turn.attack.document.id }}{% if turn.attack.document.poisoned %}, poisoned{% endif %})
+              </div>
+              <div class="msg-text">{{ turn.attack.document.body }}</div>
+            </div>
+            {% endif %}
+            <div class="msg-block">
+              <div class="msg-label">Alice Reply{% if turn.reply.blocked_by %} (blocked by {{ turn.reply.blocked_by }}){% endif %} &bull; {{ turn.reply.latency_ms }} ms</div>
+              <div class="msg-text">{{ turn.reply.content }}</div>
+            </div>
+            {% if turn.reply.tool_calls %}
+            <div class="msg-block">
+              <div class="msg-label">Tool Calls</div>
+              <div class="msg-text">{% for tc in turn.reply.tool_calls %}{{ tc.name }}({{ tc.arguments }})
+{% endfor %}</div>
+            </div>
+            {% endif %}
+            <div class="msg-block">
+              <div class="msg-label">Queen Verdict Reason</div>
+              <div class="msg-text">{{ turn.verdict.reason }}</div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </details>
+      {% endfor %}
+    </section>
+
+    <footer>
+      <span>Generated by Wonderland Court v0.1.0</span>
+      <span class="mono">Run {{ bundle.summary.run_id }} &bull; {{ bundle.summary.matches }} matches</span>
+    </footer>
+  </div>
+</body>
+</html>

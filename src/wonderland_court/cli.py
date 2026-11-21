@@ -104,9 +104,14 @@ def serve(
         Path | None, typer.Option(help="Replay a recorded run file instead of a live run.")
     ] = None,
     speed: Annotated[float, typer.Option(help="Replay speed multiplier.")] = 4.0,
+    db: Annotated[Path, typer.Option(help="Path to the SQLite WAL database for live mode.")] = Path(
+        ".court/court.db"
+    ),
 ) -> None:
     """Open the Courtroom dashboard."""
-    _not_built("serve", "Courtroom")
+    from wonderland_court.courtroom.server import run_server
+
+    run_server(host=host, port=port, replay=replay, speed=speed, db_path=db)
 
 
 @app.command()
@@ -116,9 +121,44 @@ def report(
     ),
     run: Annotated[str | None, typer.Option(help="Run id. Defaults to the latest run.")] = None,
     out: Annotated[Path | None, typer.Option(help="Write to this file instead of stdout.")] = None,
+    db: Annotated[
+        Path | None, typer.Option(help="Path to SQLite WAL database (defaults to .court/court.db).")
+    ] = None,
+    input: Annotated[
+        Path | None, typer.Option("--input", "-i", help="Read events from a JSONL file.")
+    ] = None,
 ) -> None:
     """Write a report for a finished run."""
-    _not_built("report", "Courtroom")
+    from wonderland_court.courtroom.reports import write_report
+
+    resolved_db = db
+    if input is None and resolved_db is None:
+        default_db = Path(".court/court.db")
+        if default_db.is_file():
+            resolved_db = default_db
+        else:
+            typer.echo(
+                "No database found at .court/court.db; pass --db <path> or --input <run.jsonl>.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    try:
+        rendered = write_report(
+            fmt=format.value,
+            out_path=out,
+            db_path=resolved_db,
+            input_path=input,
+            run_id=run,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"Report error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if out is None:
+        typer.echo(rendered)
+    else:
+        typer.echo(f"Wrote {format.value.upper()} report to {out}")
 
 
 @app.command()
