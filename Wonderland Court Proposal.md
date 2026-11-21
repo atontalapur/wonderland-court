@@ -81,19 +81,19 @@ Cheshire Cat
 
 Adaptive attacker
 
-Picks tactics with a bandit, refines payloads from Alice's refusals, and switches tactics when blocked.
+Picks tactics with a bandit from a configurable catalog (`TechniqueFamily`, including research methods such as Foot-in-the-Door, AutoAdv, PAIR, TAP, JailbreakBench and HarmBench), refines payloads from Alice's refusals, and switches tactics when blocked.
 
 Mad Hatter
 
 Fuzzer
 
-Encodings, riddles, mixed languages, junk tokens, plus evolution over near-misses. The generator is `raven`.
+Encodings, riddles, mixed languages, junk tokens, Base64/cipher and low-resource-language smuggling (`MutatorId`), plus evolution over near-misses. The generator is `raven`.
 
 Drink Me
 
 Poisoned documents
 
-Emails, pages and tool outputs carrying hidden instructions. Alice obeys the label on the bottle.
+Emails, pages and tool outputs carrying hidden instructions (BIPIA, Rag 'n Roll, AgentDojo tool results, MCP tool descriptions). Alice obeys the label on the bottle.
 
 Queen of Hearts
 
@@ -187,7 +187,7 @@ Wave 1 · Adversaries♥︎
 
 Cheshire Cat, Mad Hatter and the Queen
 
-Adaptive attacker with 14 technique families, 16 mutators, Drink Me generator, four-layer judge.
+Adaptive attacker with a selectable tactic catalog (demo families plus research tactics such as Foot-in-the-Door, AutoAdv, PAIR, TAP, AgentDojo, BIPIA, Rag 'n Roll, encoding/LRL smuggling, multilingual, MCP tool poisoning, JailbreakBench, HarmBench, CaMeL dual-flow), Mad Hatter mutators, Drink Me generator, four-layer judge.
 
 @Valientkyton
 

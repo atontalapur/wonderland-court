@@ -19,6 +19,7 @@ from .events import (
 )
 from .interfaces import Attacker, Defense, Judge, Target
 from .models import (
+    AdversaryRole,
     Attack,
     AttackContext,
     Document,
@@ -26,6 +27,7 @@ from .models import (
     MatchMode,
     MatchSpec,
     Message,
+    MutatorId,
     Ruling,
     ScenarioId,
     Stakes,
@@ -33,6 +35,7 @@ from .models import (
     TargetKind,
     TargetReply,
     TargetRequest,
+    TechniqueFamily,
     ToolCall,
     ToolRule,
     ToolSpec,
@@ -43,6 +46,7 @@ from .models import (
 __all__ = [
     "EVENT_ADAPTER",
     "SCHEMA_VERSION",
+    "AdversaryRole",
     "Attack",
     "AttackContext",
     "AttackSent",
@@ -57,6 +61,7 @@ __all__ = [
     "MatchSpec",
     "MatchStarted",
     "Message",
+    "MutatorId",
     "ReplyReceived",
     "Ruling",
     "RunEnded",
@@ -69,6 +74,7 @@ __all__ = [
     "TargetKind",
     "TargetReply",
     "TargetRequest",
+    "TechniqueFamily",
     "ToolCall",
     "ToolRule",
     "ToolSpec",

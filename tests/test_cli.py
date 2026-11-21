@@ -31,6 +31,15 @@ def test_stubs_fail_until_built(command: str) -> None:
     assert "isn't built yet" in result.output
 
 
+def test_trial_help_lists_selectable_tactics() -> None:
+    result = runner.invoke(app, ["trial", "--help"])
+    assert result.exit_code == 0
+    assert "--family" in result.output
+    assert "--mutator" in result.output
+    assert "Technique family" in result.output
+    assert "Mad Hatter mutator" in result.output
+
+
 def test_ci_rejects_a_budget_outside_zero_to_one() -> None:
     result = runner.invoke(app, ["ci", "--fail-above", "1.5"])
     assert result.exit_code == 2
