@@ -19,13 +19,27 @@ PresetName = Literal["first_blood", "quick", "full"]
 DEFENSE_PART = re.compile(r"[A-Za-z0-9_.-]+")
 
 
+DEFAULT_REQUEST_TEMPLATE: dict[str, Any] = {
+    "message": "{{message}}",
+    "canary": "{{canary}}",
+    "document": "{{document}}",
+    "history": "{{history}}",
+}
+
+
 class HttpTargetConfig(Contract):
-    """A black-box agent behind HTTP. #19 defines the template placeholders and the hooks."""
+    """A black-box agent behind HTTP. `engine/agent_targets.py` documents the placeholders.
+
+    Court POSTs `request_template` as JSON, then reads the reply text at `response_path` and
+    any tool calls at `tool_calls_path`, both dotted paths such as `choices.0.message.content`.
+    `${ENV_VAR}` in `url` and `headers` is filled in from the environment.
+    """
 
     kind: Literal["http"]
     url: str
-    request_template: dict[str, Any]
+    request_template: dict[str, Any] = DEFAULT_REQUEST_TEMPLATE
     response_path: str = "reply"
+    tool_calls_path: str | None = "tool_calls"
     headers: dict[str, str] = {}
 
 
