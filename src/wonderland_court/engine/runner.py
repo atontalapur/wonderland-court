@@ -11,6 +11,7 @@ replays those seeds against a hardened config.
 import asyncio
 import contextlib
 import hashlib
+import logging
 import secrets
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -48,6 +49,7 @@ from .defenses import DefensePolicy, compose_defenses
 from .scenarios import build_scenario
 from .store import CourtStore, RunRecord
 
+log = logging.getLogger(__name__)
 E = TypeVar("E", bound=EventBase)
 Sink = Callable[[Event], Awaitable[None]]
 
@@ -60,13 +62,22 @@ class EventLog:
     """Numbers one run's events and hands them to a sink, one at a time.
 
     `seq` counts up from 0 and `ts` never goes backwards, even with matches running at once.
-    An event the sink rejects doesn't use up its `seq`.
+    An event the sink rejects doesn't use up its `seq`. A listener, such as the terminal
+    view, hears each event once it's recorded; a listener that raises is logged and ignored,
+    so the display can't break the run or its numbering.
     """
 
-    def __init__(self, run_id: str, sink: Sink, clock: Callable[[], datetime] = _now) -> None:
+    def __init__(
+        self,
+        run_id: str,
+        sink: Sink,
+        clock: Callable[[], datetime] = _now,
+        listener: Callable[[Event], None] | None = None,
+    ) -> None:
         self.run_id = run_id
         self._sink = sink
         self._clock = clock
+        self._listener = listener
         self._seq = 0
         self._last: datetime | None = None
         self._lock = asyncio.Lock()
@@ -80,6 +91,11 @@ class EventLog:
             await self._sink(cast(Event, event))
             self._seq += 1
             self._last = ts
+            if self._listener is not None:
+                try:
+                    self._listener(cast(Event, event))
+                except Exception:
+                    log.warning("event listener failed on event %d", event.seq, exc_info=True)
             return event
 
 
@@ -248,12 +264,7 @@ async def run_trial(
     )
     run_id = run_id or new_run_id()
 
-    async def sink(event: Event) -> None:
-        await store.append_event(event)
-        if on_event is not None:
-            on_event(event)
-
-    log = EventLog(run_id, sink, clock)
+    log = EventLog(run_id, store.append_event, clock, listener=on_event)
     await store.create_run(
         RunRecord(
             run_id=run_id,

@@ -8,11 +8,14 @@ import pytest
 from typer.main import get_command
 from typer.testing import CliRunner, Result
 
-from wonderland_court import __version__, registry
+from wonderland_court import __version__, cli, registry
 from wonderland_court.cli import app
 from wonderland_court.contracts import (
     MatchStarted,
     MutatorId,
+    TargetKind,
+    TargetReply,
+    TargetRequest,
     TechniqueFamily,
     parse_event,
 )
@@ -177,6 +180,7 @@ def test_fixed_mode_without_a_family_is_a_usage_error(
     [
         ("target: llama3.1\ndefenses: ['plain!']\n", "bad defense name"),
         ("target: llama3.1\ndefenses: [plain+moat]\n", "unknown defense 'moat'"),
+        ("target: llama3.1\ndefenses: [plain, spotlighting+moat]\n", "unknown defense 'moat'"),
         ("target: 'python:my_agent:respond'\n", "agent target"),
     ],
 )
@@ -188,6 +192,41 @@ def test_bad_court_yaml_is_a_usage_error(
     result = invoke("trial")
     assert result.exit_code == 2
     assert message in result.output
+
+
+@pytest.mark.parametrize("args", [["trial", "--mock"], ["advise"], ["report"], ["serve"]])
+def test_an_explicit_config_that_is_missing_is_a_usage_error(
+    args: list[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    result = invoke(*args, "--config", "prod.yml")
+    assert result.exit_code == 2
+    assert "prod.yml doesn't exist" in result.output
+
+
+def test_a_real_trial_that_fails_says_why_without_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Unreachable:
+        name = "ollama:llama3.1"
+        kind = TargetKind.MODEL
+
+        async def respond(self, request: TargetRequest) -> TargetReply:
+            raise ConnectionError("Ollama isn't answering on 127.0.0.1:11434")
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "court.yaml").write_text(
+        "target: ollama:llama3.1\ndefenses: [plain]\nscenarios: [vault]\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(cli, "build_target", lambda spec, client: Unreachable())
+    monkeypatch.setattr(registry, "load_attacker", lambda c, client: registry.ScriptedAttacker())
+    monkeypatch.setattr(registry, "load_judge", lambda c, client: registry.CanaryJudge())
+    result = invoke("trial")
+    assert result.exit_code == 1
+    assert "The trial stopped: ConnectionError: Ollama isn't answering" in result.output
+    assert "Traceback" not in result.output
+    with sqlite3.connect(tmp_path / ".court" / "court.db") as connection:
+        assert connection.execute("SELECT status FROM runs").fetchall() == [("failed",)]
 
 
 def test_ci_rejects_a_budget_outside_zero_to_one() -> None:

@@ -158,6 +158,22 @@ async def test_event_log_numbers_events_and_never_goes_back_in_time() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_failing_listener_neither_stops_the_run_nor_skips_a_seq(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sink = Recorder()
+
+    def listener(event: Event) -> None:
+        raise ValueError("the terminal fell over")
+
+    log = EventLog("run-1", sink, listener=listener)
+    for _ in range(3):
+        await log.emit(MatchEnded, match_id="m1", broken=False, turns=0)
+    assert [e.seq for e in sink.events] == [0, 1, 2]
+    assert "event listener failed" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_a_rejected_event_does_not_use_up_its_seq() -> None:
     seen: list[int] = []
 

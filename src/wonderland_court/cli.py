@@ -13,6 +13,7 @@ from typing import Annotated, NoReturn
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import Progress
 
 from wonderland_court import __version__, registry
@@ -73,9 +74,16 @@ def _print_version(value: bool) -> None:
         raise typer.Exit()
 
 
+def _missing(path: Path) -> None:
+    """An explicit --config that isn't there is a typo, not a request for the defaults."""
+    if path != DEFAULT_CONFIG:
+        _fail(f"{path} doesn't exist.", code=2)
+
+
 def _settings(path: Path, preset: PresetName | None = None) -> CourtConfig:
     """court.yaml if it exists, else the defaults with the default target."""
     if not path.exists():
+        _missing(path)
         return CourtConfig.from_mapping({"target": DEFAULT_TARGET}, preset)
     try:
         return load_config(path, preset)
@@ -112,13 +120,14 @@ def doctor() -> None:
 
 def _trial_settings(path: Path, *, quick: bool, mock: bool) -> CourtConfig:
     preset: PresetName | None = "quick" if quick else None
-    if path.exists() or not mock:
-        if not path.exists():
-            _fail(
-                f"No {path} here. Write one (court init arrives with #19), or try an offline "
-                "run with `court trial --quick --mock`."
-            )
+    if path.exists():
         return _settings(path, preset)
+    _missing(path)
+    if not mock:
+        _fail(
+            f"No {path} here. Write one (court init arrives with #19), or try an offline "
+            "run with `court trial --quick --mock`."
+        )
     return CourtConfig.from_mapping({"target": MockTarget.name}, preset)
 
 
@@ -129,7 +138,7 @@ def _runnable_defenses(stacks: list[str], kind: TargetKind, console: Console) ->
         try:
             parse_defenses(stack, kind)
         except registry.NotBuiltError as exc:
-            console.print(f"[yellow]Skipping {stack}: {exc}.[/]")
+            console.print(f"[yellow]Skipping {escape(stack)}: {escape(str(exc))}.[/]")
             continue
         except ValueError as exc:
             _fail(str(exc), code=2)
@@ -152,11 +161,11 @@ class _Reporter:
             self._specs[event.match.match_id] = event.match
         elif isinstance(event, MatchEnded):
             spec = self._specs[event.match_id]
-            label = f"{spec.match_id}  {spec.defense} vs {spec.scenario.value}"
+            label = escape(f"{spec.match_id}  {spec.defense} vs {spec.scenario.value}")
             if event.broken:
                 verdict = (
                     f"[bold red]Off with her head![/] turn {event.broken_on_turn}, "
-                    f"{event.breaking_family}"
+                    f"{escape(event.breaking_family or '')}"
                 )
             else:
                 verdict = f"[green]held[/] for {event.turns} turns"
@@ -276,21 +285,30 @@ def trial(
 
     where = "offline, mock" if mock else name
     console.print(f"[bold]Wonderland Court[/] is in session: {len(planned)} matches ({where}).")
-    result, jsonl = asyncio.run(
-        _trial(
-            settings,
-            mock=mock,
-            defenses=defenses,
-            families=families,
-            mutators=mutators,
-            console=console,
-            total=len(planned),
+    try:
+        result, jsonl = asyncio.run(
+            _trial(
+                settings,
+                mock=mock,
+                defenses=defenses,
+                families=families,
+                mutators=mutators,
+                console=console,
+                total=len(planned),
+            )
         )
-    )
+    except Exception as exc:
+        if mock:
+            raise  # nothing outside Court runs in a mock trial, so this is a bug: keep the trace
+        _fail(
+            f"The trial stopped: {type(exc).__name__}: {exc}\n"
+            f"The run is marked failed in {settings.db_path}. Check that Ollama is running and "
+            "the models are pulled (`ollama list`); `court doctor` will check this (#19)."
+        )
     console.print(
         f"\n{result.leaks} of {len(result.matches)} matches leaked. Run [bold]{result.run_id}[/]"
     )
-    console.print(f"Recorded in {settings.db_path} and {jsonl}")
+    console.print(escape(f"Recorded in {settings.db_path} and {jsonl}"))
 
 
 # Commands other tracks build, reached through the registry
