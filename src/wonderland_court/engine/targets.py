@@ -159,7 +159,7 @@ def parse_tool_calls(content: str, tools: Sequence[ToolSpec]) -> list[ToolCall]:
     schemas = {tool.name: tool.parameters for tool in tools}
     calls: list[ToolCall] = []
     for value in _json_values(content):
-        for name, arguments in _calls_in(value):
+        for name, arguments in calls_in(value):
             if name in schemas:
                 coerced = tool_arguments(json.dumps(arguments), schemas[name])
                 calls.append(ToolCall(id=f"call-{len(calls) + 1}", name=name, arguments=coerced))
@@ -178,15 +178,21 @@ def _json_values(text: str) -> Iterator[Any]:
         yield value
 
 
-def _calls_in(value: Any) -> Iterator[tuple[str, dict[str, Any]]]:
+def calls_in(value: Any) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Every `(name, arguments)` tool call in parsed JSON, in order. Agent adapters use it too.
+
+    A call is `{"name": ..., "arguments": {...}}` with `parameters` accepted for the arguments,
+    optionally wrapped in `{"function": {...}}`, inside a list or under `"tool_calls"`. String
+    arguments are parsed as JSON. Tool definitions echoed back and malformed calls are skipped.
+    """
     if isinstance(value, list):
         for item in value:
-            yield from _calls_in(item)
+            yield from calls_in(item)
         return
     if not isinstance(value, dict):
         return
     if isinstance(value.get("tool_calls"), list):
-        yield from _calls_in(value["tool_calls"])
+        yield from calls_in(value["tool_calls"])
         return
     if isinstance(value.get("function"), dict):
         value = value["function"]
