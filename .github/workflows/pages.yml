@@ -1,0 +1,88 @@
+name: Deploy Static Courtroom to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/benchmark-data/**"
+      - "web/**"
+      - "fixtures/fake_run.jsonl"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build static Courtroom bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          python-version: "3.11"
+
+      - run: uv sync --locked
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Generate or copy static Courtroom data
+        run: |
+          set -euo pipefail
+          rm -rf web/public/data
+          mkdir -p web/public/data
+          if [ -f docs/benchmark-data/manifest.json ]; then
+            cp -R docs/benchmark-data/. web/public/data/
+          else
+            uv run python -c "
+          from pathlib import Path
+          from wonderland_court.courtroom.static_site import export_static_bundle
+
+          bench_dir = Path('docs/benchmark-data')
+          jsonl_files = sorted(bench_dir.glob('*.jsonl')) if bench_dir.is_dir() else []
+          db_files = sorted(bench_dir.glob('*.db')) if bench_dir.is_dir() else []
+          if db_files or jsonl_files:
+              export_static_bundle(
+                  db_path=db_files[0] if db_files else None,
+                  jsonl_paths=jsonl_files,
+                  out_dir=Path('web/public'),
+              )
+          else:
+              export_static_bundle(
+                  jsonl_paths=[Path('fixtures/fake_run.jsonl')],
+                  out_dir=Path('web/public'),
+              )
+          "
+          fi
+
+      - name: Build static web bundle
+        run: |
+          cd web
+          npm ci
+          npm run build:static
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist-pages
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

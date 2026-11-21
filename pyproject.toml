@@ -7,8 +7,13 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
+    "aiosqlite>=0.20",
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "jinja2>=3.1",
     "pydantic>=2.14.4",
     "typer>=0.29.2",
+    "uvicorn>=0.32",
 ]
 
 [project.scripts]
@@ -20,6 +25,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/wonderland_court"]
+artifacts = [
+    "src/wonderland_court/courtroom/static/**",
+    "src/wonderland_court/courtroom/templates/**",
+]
 
 [tool.ruff]
 line-length = 100
@@ -38,10 +47,12 @@ warn_redundant_casts = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
 
 [dependency-groups]
 dev = [
     "mypy>=2.4.1",
     "pytest>=9.2.0",
+    "pytest-asyncio>=0.24",
     "ruff>=0.17.6",
 ]
