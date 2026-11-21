@@ -25,6 +25,15 @@ You point Wonderland Court at an AI model or agent. A cast of *Alice in Wonderla
 
 Wonderland Court runs locally on **Ollama**, so testing costs nothing and your prompts, secrets, and data never leave your machine. It also supports remote model APIs and custom HTTP or Python agents.
 
+## To-do: production-grade test targets
+
+Stand-ins to create or find so Court can be tested beyond fixtures:
+
+- [ ] **Dumb echo target** — blindly follows instructions; exercises **injection resistance**
+- [ ] **Mid-tier tool agent** — system prompt + refund/lookup tools; exercises **tool gating**
+- [ ] **RAG-backed target** — retrieves from a fake knowledge base; exercises **retrieval safety**
+- [ ] **Stubborn target** — refuses or hedges by default; exercises **refusal robustness** (and Dodo utility)
+
 ## More details
 
 Built for CutieHack at UCR. See [Wonderland Court Proposal.md](./Wonderland%20Court%20Proposal.md) for the full architecture, roadmap, and demo plan.
