@@ -317,6 +317,39 @@ export interface HealthResponse {
   mode?: "live" | "replay" | "static";
   replay?: boolean;
   active_run_id?: string | null;
+  studio_enabled?: boolean;
+}
+
+export interface StudioJob {
+  job_id: string;
+  kind: "trial" | "advise" | "retrial";
+  status: "running" | "completed" | "failed";
+  run_id: string | null;
+  retrial_run_id: string | null;
+  progress_done: number;
+  progress_total: number;
+  message: string;
+  error: string | null;
+}
+
+export interface StudioOptions {
+  ollama_available: boolean;
+  ollama_models: string[];
+  embed_models: string[];
+  scenarios: ScenarioId[];
+  defenses: string[];
+  default_defenses: string[];
+  active_job: StudioJob | null;
+}
+
+export interface StartTrialPayload {
+  target: string;
+  scenarios: ScenarioId[];
+  defenses: string[];
+  mode: MatchMode;
+  rounds: number;
+  max_turns: number;
+  utility?: boolean;
 }
 
 export interface StaticManifest {

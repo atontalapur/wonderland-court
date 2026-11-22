@@ -23,6 +23,7 @@ from .models import (
 from .rate_limit import IPRateLimiter
 from .replay import ReplayStore
 from .sse import resolve_after_seq, stream_latest_live_events, stream_live_events
+from .studio import LocalStudioManager, StartRetrialRequest, StartTrialRequest
 
 DEFAULT_DB_PATH = Path(".court/court.db")
 DEFAULT_STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -124,12 +125,15 @@ def create_app(
         max_requests_per_min=max_requests_per_min,
         max_sse_per_ip=max_sse_per_ip,
     )
-    reader = CourtReadDB(db_path if db_path is not None else DEFAULT_DB_PATH)
+    resolved_db_path = db_path if db_path is not None else DEFAULT_DB_PATH
+    reader = CourtReadDB(resolved_db_path)
+    studio = LocalStudioManager(resolved_db_path)
     replay_store = ReplayStore(replay_path) if replay_path is not None else None
     resolved_static_dir = static_dir if static_dir is not None else DEFAULT_STATIC_DIR
 
     app.state.limiter = limiter
     app.state.reader = reader
+    app.state.studio = studio
     app.state.replay_store = replay_store
     app.state.replay_speed = speed
     app.state.static_dir = resolved_static_dir
@@ -162,12 +166,79 @@ def create_app(
     @api.get("/health")
     async def health() -> dict[str, Any]:
         db_ready = await reader.is_ready()
+        active_job = studio.get_active_job()
+        active_run_id = active_job.run_id if active_job and active_job.status == "running" else None
         return {
             "status": "ok",
             "mode": "replay" if replay_store is not None else "live",
             "db_ready": db_ready,
             "replay_speed": speed,
+            "studio_enabled": replay_store is None,
+            "active_run_id": active_run_id,
         }
+
+    @api.get("/studio/options")
+    async def studio_options() -> dict[str, Any]:
+        if replay_store is not None:
+            raise HTTPException(status_code=400, detail="Local studio is disabled in replay mode.")
+        return studio.get_options()
+
+    @api.post("/studio/trials")
+    async def studio_start_trial(req: StartTrialRequest) -> dict[str, Any]:
+        if replay_store is not None:
+            raise HTTPException(status_code=400, detail="Local studio is disabled in replay mode.")
+        try:
+            job = await studio.start_trial(req)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return job.to_dict()
+
+    @api.get("/studio/jobs/{job_id}")
+    async def studio_get_job(job_id: str) -> dict[str, Any]:
+        job = studio.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+        return job.to_dict()
+
+    @api.post("/studio/runs/{run_id}/advise")
+    async def studio_advise(run_id: str) -> dict[str, Any]:
+        if replay_store is not None:
+            raise HTTPException(status_code=400, detail="Local studio is disabled in replay mode.")
+        resolved = await _resolve_run_id(run_id)
+        try:
+            return await studio.run_advise(resolved)
+        except (FileNotFoundError, LookupError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Caterpillar advice failed: {type(exc).__name__}: {exc}",
+            ) from exc
+
+    @api.post("/studio/runs/{run_id}/retrial")
+    async def studio_retrial(
+        run_id: str,
+        req: StartRetrialRequest | None = None,
+    ) -> dict[str, Any]:
+        if replay_store is not None:
+            raise HTTPException(status_code=400, detail="Local studio is disabled in replay mode.")
+        resolved = await _resolve_run_id(run_id)
+        try:
+            job = await studio.start_retrial(
+                resolved,
+                defense=req.defense if req is not None else None,
+            )
+        except (FileNotFoundError, LookupError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return job.to_dict()
 
     @api.get("/runs")
     async def list_runs() -> dict[str, list[dict[str, Any]]]:

@@ -1,18 +1,21 @@
 import {
   ChevronRight,
+  Loader2,
   PlayCircle,
   Sparkles,
   Swords,
   Trophy,
+  Wand2,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type {
   CalibrationSummary,
   RunSummary,
   StreamConnectionMode,
+  StudioJob,
 } from "../types/events";
 
-export type DashboardTab = "feed" | "leaderboard" | "caterpillar";
+export type DashboardTab = "setup" | "feed" | "leaderboard" | "caterpillar";
 
 interface LayoutProps {
   runs: RunSummary[];
@@ -23,22 +26,13 @@ interface LayoutProps {
   activeTab: DashboardTab;
   onTabChange: (tab: DashboardTab) => void;
   activeSummary: RunSummary | null;
+  studioEnabled?: boolean;
+  activeJob?: StudioJob | null;
   replayBar?: ReactNode;
   onTriggerReplay?: () => void;
   canTriggerReplay?: boolean;
   children: ReactNode;
 }
-
-const STEPS: {
-  id: DashboardTab;
-  stepNum: number;
-  label: string;
-  Icon: typeof Swords;
-}[] = [
-  { id: "feed", stepNum: 1, label: "Watch the Trial", Icon: Swords },
-  { id: "leaderboard", stepNum: 2, label: "Scoreboard", Icon: Trophy },
-  { id: "caterpillar", stepNum: 3, label: "Caterpillar's Fix", Icon: Sparkles },
-];
 
 export function Layout({
   runs,
@@ -48,12 +42,35 @@ export function Layout({
   activeTab,
   onTabChange,
   activeSummary,
+  studioEnabled = false,
+  activeJob = null,
   replayBar,
   onTriggerReplay,
   canTriggerReplay,
   children,
 }: LayoutProps) {
-  const activeIndex = STEPS.findIndex((s) => s.id === activeTab);
+  const steps: {
+    id: DashboardTab;
+    label: string;
+    Icon: typeof Swords;
+  }[] = studioEnabled
+    ? [
+        { id: "setup", label: "Choose Alice", Icon: Wand2 },
+        { id: "feed", label: "Watch the Trial", Icon: Swords },
+        { id: "leaderboard", label: "Scoreboard", Icon: Trophy },
+        { id: "caterpillar", label: "Caterpillar's Fix", Icon: Sparkles },
+      ]
+    : [
+        { id: "feed", label: "Watch the Trial", Icon: Swords },
+        { id: "leaderboard", label: "Scoreboard", Icon: Trophy },
+        { id: "caterpillar", label: "Caterpillar's Fix", Icon: Sparkles },
+      ];
+
+  const activeIndex = steps.findIndex((s) => s.id === activeTab);
+  const jobPct =
+    activeJob && activeJob.progress_total > 0
+      ? Math.round((activeJob.progress_done / activeJob.progress_total) * 100)
+      : 0;
 
   return (
     <div className="min-h-screen text-[#231f1a]">
@@ -89,11 +106,15 @@ export function Layout({
                     </span>
                   )}
                 </div>
-                {activeSummary && (
+                {activeSummary ? (
                   <p className="text-xs text-[#6b5e4e]">
                     {activeSummary.matches} trials ·{" "}
                     {activeSummary.matches - activeSummary.leaks} held ·{" "}
                     {activeSummary.leaks} breached
+                  </p>
+                ) : (
+                  <p className="text-xs text-[#6b5e4e]">
+                    Local AI Adversarial Storybook Arena
                   </p>
                 )}
               </div>
@@ -116,7 +137,7 @@ export function Layout({
                 </select>
               )}
 
-              {canTriggerReplay && onTriggerReplay && (
+              {canTriggerReplay && onTriggerReplay && activeTab !== "setup" && (
                 <button
                   type="button"
                   onClick={onTriggerReplay}
@@ -129,12 +150,12 @@ export function Layout({
             </div>
           </div>
 
-          {/* Linear 3-Step Storybook Navigation */}
+          {/* Linear Storybook Stepper */}
           <nav
             className="mt-3.5 flex items-center gap-1.5 overflow-x-auto border-t border-[#efe2cc] pt-3"
             aria-label="Courtroom steps"
           >
-            {STEPS.map(({ id, stepNum, label, Icon }, idx) => {
+            {steps.map(({ id, label, Icon }, idx) => {
               const active = activeTab === id;
               const completed = idx < activeIndex;
               return (
@@ -160,13 +181,13 @@ export function Layout({
                             : "bg-[#e8dac2] text-[#5c4f41]"
                       }`}
                     >
-                      {stepNum}
+                      {idx + 1}
                     </span>
                     <Icon className="h-3.5 w-3.5" />
                     <span>{label}</span>
                   </button>
 
-                  {idx < STEPS.length - 1 && (
+                  {idx < steps.length - 1 && (
                     <ChevronRight
                       className="h-4 w-4 shrink-0 text-[#cfb489]"
                       aria-hidden="true"
@@ -176,6 +197,32 @@ export function Layout({
               );
             })}
           </nav>
+
+          {/* Live Local Job Progress Bar */}
+          {activeJob && activeJob.status === "running" && (
+            <div
+              className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#b7cfe8] bg-[#eff6ff] px-4 py-2.5 text-xs text-[#1e4568]"
+              data-testid="studio-job-banner"
+            >
+              <div className="flex items-center gap-2 font-semibold">
+                <Loader2 className="h-4 w-4 animate-spin text-[#2b5b84]" />
+                <span>{activeJob.message}</span>
+              </div>
+              {activeJob.progress_total > 0 && (
+                <div className="flex items-center gap-2.5">
+                  <div className="h-2 w-32 overflow-hidden rounded-full bg-[#dbeafe]">
+                    <div
+                      className="h-full rounded-full bg-[#2b5b84] transition-all duration-300"
+                      style={{ width: `${Math.max(6, jobPct)}%` }}
+                    />
+                  </div>
+                  <span className="font-mono font-bold">
+                    {activeJob.progress_done}/{activeJob.progress_total}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
 
           {replayBar && <div className="mt-3">{replayBar}</div>}
         </div>
