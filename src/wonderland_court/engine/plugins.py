@@ -17,7 +17,8 @@ names the entry point and its package, and only when something asks for it, so a
 plugin never breaks a command that doesn't use it.
 
 Built-in names win: a plugin that reuses one (`sandwich`, `vault`, `base64`) is never loaded.
-A name that two packages register is an error until one of them is uninstalled.
+A name that two packages register is an error until one of them is uninstalled. `court
+plugins` lists every installed plugin and why any of them can't be used.
 
 Plugins run inside Court with its permissions. Installing one means trusting its code.
 """
