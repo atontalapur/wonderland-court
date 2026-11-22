@@ -27,7 +27,7 @@ WIDE = {"COLUMNS": "200", "NO_COLOR": "1"}
 FAKE_RUN = Path(__file__).resolve().parents[1] / "fixtures" / "fake_run.jsonl"
 
 COMMANDS = ["init", "doctor", "trial", "merge", "serve", "report", "ci", "advise", "retrial"]
-STUBS = ["ci"]
+STUBS: list[str] = []
 
 
 def invoke(*args: str) -> Result:
