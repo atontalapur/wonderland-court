@@ -1,0 +1,4 @@
+# Hardened by `court advise` from run run-20261122T023852Z-f63144 (target kind: model).
+# `court retrial` replays the run's seeds with it. Merge it into court.yaml to keep it.
+defenses:
+  - "spotlighting+guard+output_filter"
