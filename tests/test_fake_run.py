@@ -4,6 +4,7 @@ from types import ModuleType
 
 from wonderland_court.contracts import (
     AttackSent,
+    Event,
     MatchEnded,
     MatchStarted,
     ReplyReceived,
@@ -36,19 +37,19 @@ def test_fixture_is_up_to_date_with_the_script() -> None:
     )
 
 
-def test_run_is_bracketed_and_ordered() -> None:
-    assert isinstance(EVENTS[0], RunStarted)
-    assert isinstance(EVENTS[-1], RunEnded)
-    assert [e.seq for e in EVENTS] == list(range(len(EVENTS)))
-    assert all(a.ts <= b.ts for a, b in zip(EVENTS, EVENTS[1:], strict=False))
-    assert {e.run_id for e in EVENTS} == {EVENTS[0].run_id}
+def assert_bracketed_and_ordered(events: list[Event]) -> None:
+    assert isinstance(events[0], RunStarted)
+    assert isinstance(events[-1], RunEnded)
+    assert [e.seq for e in events] == list(range(len(events)))
+    assert all(a.ts <= b.ts for a, b in zip(events, events[1:], strict=False))
+    assert {e.run_id for e in events} == {events[0].run_id}
 
 
-def test_turns_belong_to_started_matches_and_follow_attack_reply_verdict() -> None:
+def assert_turns_follow_attack_reply_verdict(events: list[Event]) -> None:
     started: set[str] = set()
     expected = ("attack", "reply", "verdict")
     step: dict[str, int] = {}
-    for event in EVENTS:
+    for event in events:
         if isinstance(event, MatchStarted):
             started.add(event.match.match_id)
             step[event.match.match_id] = 0
@@ -59,16 +60,35 @@ def test_turns_belong_to_started_matches_and_follow_attack_reply_verdict() -> No
             step[event.match_id] += 1
 
 
-def test_match_results_agree_with_verdicts() -> None:
+def assert_results_agree_with_verdicts(events: list[Event]) -> None:
     first_leak: dict[str, int] = {}
-    for event in EVENTS:
+    for event in events:
         if isinstance(event, VerdictRuled) and event.verdict.ruling is Ruling.LEAK:
             first_leak.setdefault(event.match_id, event.turn)
-    ended = [e for e in EVENTS if isinstance(e, MatchEnded)]
+    ended = [e for e in events if isinstance(e, MatchEnded)]
     for match in ended:
         assert match.broken == (match.match_id in first_leak)
         assert match.broken_on_turn == first_leak.get(match.match_id)
-    run_end = EVENTS[-1]
+    run_end = events[-1]
     assert isinstance(run_end, RunEnded)
     assert run_end.matches == len(ended)
     assert run_end.leaks == len(first_leak)
+
+
+def assert_run_invariants(events: list[Event]) -> None:
+    """Every rule a run's event stream must follow. Other tests apply it to real runs."""
+    assert_bracketed_and_ordered(events)
+    assert_turns_follow_attack_reply_verdict(events)
+    assert_results_agree_with_verdicts(events)
+
+
+def test_run_is_bracketed_and_ordered() -> None:
+    assert_bracketed_and_ordered(EVENTS)
+
+
+def test_turns_belong_to_started_matches_and_follow_attack_reply_verdict() -> None:
+    assert_turns_follow_attack_reply_verdict(EVENTS)
+
+
+def test_match_results_agree_with_verdicts() -> None:
+    assert_results_agree_with_verdicts(EVENTS)

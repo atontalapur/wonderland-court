@@ -200,6 +200,22 @@ def test_no_fuzzer_call_without_suggested_mutators() -> None:
     assert attack.mutators == []
 
 
+def test_mutated_attack_keeps_the_pre_mutation_payload() -> None:
+    context = make_context(mode=MatchMode.FIXED, family=TechniqueFamily.ENCODING.value).model_copy(
+        update={"enabled_mutators": [MutatorId.BASE64]}
+    )
+    attack = run(CheshireCat(fuzzer=InlineFuzzer()), context)
+    assert attack.payload
+    assert attack.message == f"[base64]{attack.payload}"
+
+
+def test_unmutated_attack_has_no_payload() -> None:
+    context = make_context(mode=MatchMode.FIXED, family=TechniqueFamily.DIRECT_ASK.value)
+    assert run(CheshireCat(fuzzer=InlineFuzzer()), context).payload is None
+    encoding = make_context(mode=MatchMode.FIXED, family=TechniqueFamily.ENCODING.value)
+    assert run(CheshireCat(), encoding).payload is None
+
+
 # Refiner
 
 

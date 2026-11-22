@@ -13,15 +13,16 @@ One generation:
    one used on any turn a defense blocked (`reply.blocked_by` set).
 
 Everything draws from one `random.Random(seed)`, so the same history and seed give the same
-offspring. Parents are the recorded attack messages, which are already mutated: `Turn` does
-not keep the Cat's pre-mutation payload.
+offspring. Crossover reads each parent's `Attack.payload`, the Cat's text before mutation, so
+an encoded parent is not encoded again. Turns recorded without a payload fall back to the
+sent `message`.
 """
 
 from __future__ import annotations
 
 import random
 import re
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 from wonderland_court.adversaries.tactics import resolve_mutators
 from wonderland_court.contracts.models import MutatorId, Ruling, Turn
@@ -38,6 +39,14 @@ _BOUNDARY_RE = re.compile(r"(?<=[.!?;:,])\s+|\n+")
 """Sentence or clause boundaries. A cut lands just after the whitespace."""
 
 
+class Offspring(NamedTuple):
+    """One bred payload: the mutators applied, the mutated message and the clean crossover."""
+
+    mutators: list[str]
+    message: str
+    payload: str
+
+
 def is_near_miss(turn: Turn) -> bool:
     return turn.verdict.ruling is Ruling.HELD and turn.verdict.confidence < NEAR_MISS_CONFIDENCE
 
@@ -45,6 +54,11 @@ def is_near_miss(turn: Turn) -> bool:
 def fitness(turn: Turn) -> float:
     """Higher is fitter: the less confident the Queen was that Alice held."""
     return 1.0 - turn.verdict.confidence
+
+
+def parent_text(turn: Turn) -> str:
+    """The text a parent contributes: its pre-mutation payload, else the sent message."""
+    return turn.attack.payload if turn.attack.payload is not None else turn.attack.message
 
 
 def _cuts(text: str) -> list[int]:
@@ -74,10 +88,8 @@ class PayloadEvolver:
         self.fuzzer = fuzzer
         self.seed = seed
 
-    def evolve(
-        self, history: list[Turn], *, mutators: list[str] | None = None
-    ) -> tuple[list[str], str] | None:
-        """The mutator ids applied and the offspring payload, or `None` with no near-misses.
+    def evolve(self, history: list[Turn], *, mutators: list[str] | None = None) -> Offspring | None:
+        """The bred `Offspring`, or `None` with no near-misses.
 
         `mutators` is the match's allowed pool (`None` means every registered mutator). Any
         mutator used on a blocked turn anywhere in `history` is skipped: the defense already
@@ -92,7 +104,7 @@ class PayloadEvolver:
         first = self._tournament(near, rng)
         rest = [t for t in near if t is not first]
         second = self._tournament(rest, rng) if rest else first
-        child = crossover(first.attack.message, second.attack.message, rng)
+        child = crossover(parent_text(first), parent_text(second), rng)
 
         banned = {m for turn in history if turn.reply.blocked_by for m in turn.attack.mutators}
         allowed = (
@@ -106,11 +118,12 @@ class PayloadEvolver:
             if m.value not in banned and (allowed is None or m.value in allowed)
         ]
         if not pool:
-            return [], child
+            return Offspring([], child, child)
         chain_len = min(rng.randint(1, 2), len(pool))
-        return self.fuzzer.mutate(
+        applied, message = self.fuzzer.mutate(
             child, seed=rng.randrange(2**31), mutators=pool, chain_len=chain_len
         )
+        return Offspring(applied, message, child)
 
     @staticmethod
     def _tournament(candidates: list[Turn], rng: random.Random) -> Turn:
