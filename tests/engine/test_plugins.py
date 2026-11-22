@@ -528,3 +528,44 @@ def test_a_broken_scenario_plugin_is_a_usage_error(
         "ModuleNotFoundError"
     )
     assert result.output.count("\n") == 1
+
+
+# court plugins
+
+
+def test_court_plugins_lists_what_is_installed_and_loads_it(acme: None) -> None:
+    result = invoke("plugins")
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines() == [
+        "KIND      NAME           PACKAGE         STATUS",
+        "target    acme           acme-court 1.0  ok",
+        "defense   custom_shield  acme-court 1.0  ok",
+        "scenario  heist          acme-court 1.0  ok",
+        "mutator   leet           acme-court 1.0  ok",
+        "Plugins run inside Court with its permissions. Install only code you trust.",
+    ]
+
+
+def test_court_plugins_fails_when_a_plugin_is_unusable(install: Install) -> None:
+    install(
+        """
+        [wonderland_court.defenses]
+        sandwich = acme_court:CustomShield
+        moat = acme_moat:Moat
+        """,
+        {"acme_court": ACME},
+    )
+    result = invoke("plugins")
+    assert result.exit_code == 1
+    _, moat, sandwich, _ = result.output.splitlines()
+    assert moat == (
+        "defense  moat      acme-court 1.0  "
+        "failed to load: ModuleNotFoundError: No module named 'acme_moat'"
+    )
+    assert sandwich == "defense  sandwich  acme-court 1.0  ignored: sandwich is built in"
+
+
+def test_court_plugins_with_none_installed(install: Install) -> None:
+    install("[wonderland_court.defenses]\n")
+    result = invoke("plugins")
+    assert (result.exit_code, result.output) == (0, "No plugins installed.\n")

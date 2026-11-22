@@ -3,6 +3,7 @@
 `court trial` and `court merge` run here. `serve`, `report`, `advise` and `retrial` reach
 their track's code through the registry, so those tracks never edit this file; until a track
 lands, its command says so and exits 1. The remaining stubs name the issue that builds them.
+`court plugins` lists installed plugins (see `engine/plugins.py`).
 """
 
 import asyncio
@@ -36,6 +37,7 @@ from wonderland_court.contracts import (
     TechniqueFamily,
     event_json_schema,
 )
+from wonderland_court.engine import plugins
 from wonderland_court.engine.cache import SQLiteResponseCache
 from wonderland_court.engine.defenses import parse_defenses
 from wonderland_court.engine.init_doctor import (
@@ -47,6 +49,7 @@ from wonderland_court.engine.init_doctor import (
     write_court_yaml,
 )
 from wonderland_court.engine.mock import MockDefenseModel, MockTarget
+from wonderland_court.engine.plugins import PluginKind
 from wonderland_court.engine.runner import plan_matches
 from wonderland_court.engine.scenarios import BUILT_IN_SCENARIOS, build_scenario
 from wonderland_court.engine.sharding import MergeError, Shard, merge_runs
@@ -842,3 +845,24 @@ def retrial(
 def schema() -> None:
     """Print the event JSON Schema, for generating the Courtroom's TypeScript types."""
     typer.echo(json.dumps(event_json_schema(), indent=2))
+
+
+@app.command(name="plugins")
+def list_plugins() -> None:
+    """List installed plugins and check that each one loads."""
+    rows = [
+        (kind.noun, plugin.name, plugin.package, plugins.problem(plugin))
+        for kind in PluginKind
+        for plugin in plugins.installed(kind)
+    ]
+    if not rows:
+        typer.echo("No plugins installed.")
+        return
+    table = [("KIND", "NAME", "PACKAGE", "STATUS")]
+    table += [(kind, name, package, problem or "ok") for kind, name, package, problem in rows]
+    kind_w, name_w, package_w = (max(len(row[column]) for row in table) for column in range(3))
+    for kind, name, package, status in table:
+        typer.echo(f"{kind:<{kind_w}}  {name:<{name_w}}  {package:<{package_w}}  {status}")
+    typer.echo("Plugins run inside Court with its permissions. Install only code you trust.")
+    if any(problem for *_, problem in rows):
+        raise typer.Exit(code=1)
