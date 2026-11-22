@@ -622,6 +622,7 @@ async def _retrial(
         target: Target
         attacker: Attacker
         judge: Judge
+        defense_llm: ChatClient
         if baseline.target == MockTarget.name:
             client = default_client()
             target, attacker, judge = (
@@ -629,6 +630,7 @@ async def _retrial(
                 registry.ScriptedAttacker(),
                 registry.CanaryJudge(),
             )
+            defense_llm = MockDefenseModel()
         else:
             if not isinstance(config.target, str):
                 raise ValueError("retrying an agent target needs agent targets (#19)")
@@ -637,6 +639,7 @@ async def _retrial(
             target = build_target(config.target, client)
             attacker = registry.load_attacker(config, client)
             judge = registry.load_judge(config, client)
+            defense_llm = client
         utility = registry.load_utility_evaluator(config, client)
         total = len(await store.get_matches(baseline.run_id))
         with Progress(console=console, transient=True) as progress:
@@ -649,6 +652,7 @@ async def _retrial(
                 judge=judge,
                 utility=utility,
                 on_event=_Reporter(progress, total),
+                defense_llm=defense_llm,
             )
 
 

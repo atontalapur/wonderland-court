@@ -43,6 +43,7 @@ from wonderland_court.contracts import (
 )
 from wonderland_court.engine.policy import broken_rule
 from wonderland_court.engine.store import CourtStore, RemediationAdvice, RetrialComparison
+from wonderland_court.engine.targets import ChatClient
 from wonderland_court.llm import LLMClient
 
 log = logging.getLogger(__name__)
@@ -121,6 +122,7 @@ class Remediator(Protocol):
         judge: Judge,
         utility: UtilityEvaluator,
         on_event: Callable[[Event], None] | None = None,
+        defense_llm: ChatClient | None = None,
     ) -> RetrialComparison: ...
 
 
@@ -283,6 +285,7 @@ class NotBuilt:
         judge: Judge,
         utility: UtilityEvaluator,
         on_event: Callable[[Event], None] | None = None,
+        defense_llm: ChatClient | None = None,
     ) -> RetrialComparison:
         raise self._fail()
 

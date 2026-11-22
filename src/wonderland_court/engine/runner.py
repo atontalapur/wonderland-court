@@ -283,6 +283,7 @@ async def run_trial(
         concurrency=concurrency,
         on_event=on_event,
         clock=clock,
+        defense_llm=defense_llm,
     )
 
 
@@ -299,6 +300,7 @@ async def run_matches(
     concurrency: int = 2,
     on_event: Callable[[Event], None] | None = None,
     clock: Callable[[], datetime] = _now,
+    defense_llm: ChatClient | None = None,
 ) -> TrialResult:
     """Play `specs` as one run, the way `run_trial` plays its plan.
 
