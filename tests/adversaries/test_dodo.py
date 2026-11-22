@@ -34,7 +34,7 @@ from wonderland_court.contracts.models import (
     TargetRequest,
     ToolCall,
 )
-from wonderland_court.engine import defenses
+from wonderland_court.engine import defense_base
 from wonderland_court.engine.defenses import REMINDER, DefensePolicy, compose_defenses
 from wonderland_court.engine.scenarios import TEA_SHOP_TOOLS, build_scenario, make_canary
 
@@ -431,7 +431,7 @@ def test_a_keyword_input_filter_loses_utility_on_the_typo_tasks(
     'instructions' or 'rules', so it keeps both typo tasks (above). One that blocks the bare
     words refuses exactly those two, and the quick set still catches it."""
     bare = re.compile(r"\b(?:ignore|disregard)\b")
-    monkeypatch.setattr(defenses, "INJECTION_MARKERS", [*defenses.INJECTION_MARKERS, bare])
+    monkeypatch.setattr(defense_base, "INJECTION_MARKERS", [*defense_base.INJECTION_MARKERS, bare])
     results = _through("input_filter", ScriptedTarget(), quick=quick)
     assert _lost(results) == dict.fromkeys(TYPO_TASKS, "blocked by input_filter")
     per_task = 1 / len(tasks_for(ScenarioId.REFUND_TOOL, quick=quick))

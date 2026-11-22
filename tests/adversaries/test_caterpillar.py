@@ -61,7 +61,7 @@ from wonderland_court.engine.runner import run_trial
 from wonderland_court.engine.store import CourtReader, CourtStore, RunRecord
 from wonderland_court.engine.store import RemediationAdvice as AdviceRow
 from wonderland_court.engine.store import RetrialComparison as ComparisonRow
-from wonderland_court.registry import CanaryJudge, NotBuiltError, ScriptedAttacker
+from wonderland_court.registry import CanaryJudge, ScriptedAttacker
 
 from .fakes import (
     POISONED_EMAIL,
@@ -716,20 +716,16 @@ def test_retrial_refuses_a_defense_before_it_starts_a_run(tmp_path: Path) -> Non
     async def go() -> list[str]:
         async with CourtStore(tmp_path / "court.db") as store:
             base = await mock_trial(store, ["plain"])
-            for defense, error in (
-                (STACK_SPOTLIGHT, NotBuiltError),
-                ("moat", ValueError),
-            ):
-                with pytest.raises(error):
-                    await remediator().retrial(
-                        store,
-                        base,
-                        defense=defense,
-                        target=MockTarget(),
-                        attacker=ScriptedAttacker(),
-                        judge=CanaryJudge(),
-                        utility=DodoUtility(),
-                    )
+            with pytest.raises(ValueError):
+                await remediator().retrial(
+                    store,
+                    base,
+                    defense="moat",
+                    target=MockTarget(),
+                    attacker=ScriptedAttacker(),
+                    judge=CanaryJudge(),
+                    utility=DodoUtility(),
+                )
             return [run.run_id for run in await store.list_runs()]
 
     assert len(asyncio.run(go())) == 1
