@@ -355,6 +355,29 @@ ADVICE_CASES = {
         STACK_SPOTLIGHT,
         STACK_AGENT_FULL,
     ),
+    # A role-play lie in the chat broke Drink Me past spotlighting, with no document: a direct
+    # attack and a forbidden call, not injection, so dual_llm wouldn't help.
+    "drink_me broken by a chat lie": (
+        [
+            cluster(
+                scenario=ScenarioId.DRINK_ME,
+                layers=(JudgeLayer.TOOL_CALL,),
+                defenses=("spotlighting", "sandwich"),
+                count=3,
+            ),
+            cluster(scenario=ScenarioId.REFUND_TOOL, layers=(JudgeLayer.TOOL_CALL,), count=3),
+        ],
+        [record("r1")],
+        STACK_SPOTLIGHT,
+        STACK_AGENT_FULL,
+    ),
+    # The poisoned tool description is in every mcp_poison request, so any break there counts.
+    "mcp_poison past spotlighting": (
+        [cluster(scenario=ScenarioId.MCP_POISON, defenses=("spotlighting",), count=2)],
+        [record("r1")],
+        STACK_DUAL_LLM,
+        STACK_AGENT_FULL,
+    ),
     "tool violation": (
         [cluster(scenario=ScenarioId.REFUND_TOOL, layers=(JudgeLayer.TOOL_CALL,))],
         [record("r1")],
