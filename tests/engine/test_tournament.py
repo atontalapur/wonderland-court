@@ -28,7 +28,7 @@ from wonderland_court.contracts import (
 from wonderland_court.engine.mock import MockDefenseModel, MockTarget
 from wonderland_court.engine.runner import match_seed, plan_matches
 from wonderland_court.engine.scoring import compute_standings
-from wonderland_court.engine.sharding import Shard
+from wonderland_court.engine.sharding import MergeError, Shard, merge_runs
 from wonderland_court.engine.store import CourtStore
 from wonderland_court.engine.tournament import TournamentResult, run_tournament
 from wonderland_court.llm import default_client
@@ -444,3 +444,125 @@ async def test_a_shard_plays_only_its_part(store: CourtStore) -> None:
     with sqlite3.connect(store.db_path) as connection:
         [(config_json,)] = connection.execute("SELECT config_json FROM runs").fetchall()
     assert json.loads(config_json)["shard"] == "2/3"
+
+
+# Merging shards
+
+
+async def run_into(db: Path, settings: CourtConfig, **kwargs: Any) -> TournamentResult:
+    async with CourtStore(db, jsonl_dir=db.parent / "runs") as store:
+        return await tournament(store, settings, **kwargs)
+
+
+def rows(db: Path, sql: str, run_id: str) -> list[tuple[Any, ...]]:
+    with sqlite3.connect(db) as connection:
+        return connection.execute(sql, (run_id,)).fetchall()
+
+
+MATCH_ROWS = (
+    "SELECT match_id, round, target, target_kind, defense, scenario, mode, family, seed, broken, "
+    "turns, broken_on_turn, breaking_family FROM matches WHERE run_id = ? ORDER BY match_id"
+)
+UTILITY_ROWS = (
+    "SELECT defense, scenario, pass_rate, false_refusal_rate, details_json FROM utility_results "
+    "WHERE run_id = ? ORDER BY defense, scenario"
+)
+BIG = {"rounds": 3, "scenarios": ["vault", "refund_tool", "system_prompt"]}
+
+
+@pytest.mark.asyncio
+async def test_three_shards_merge_into_the_unsharded_leaderboard(tmp_path: Path) -> None:
+    whole = await run_into(tmp_path / "whole.db", config(**BIG), utility=FakeDodo())
+    laptops = [tmp_path / f"laptop{part}" / "court.db" for part in (1, 2, 3)]
+    shards = [
+        await run_into(db, config(**BIG, shard=f"{part}/3"), utility=FakeDodo())
+        for part, db in enumerate(laptops, start=1)
+    ]
+    assert sum(len(shard.matches) for shard in shards) == len(whole.matches) == 36
+
+    out = tmp_path / "merged.db"
+    merged = await merge_runs([laptops[2], laptops[0], laptops[1]], out)
+    assert merged.missing == []
+    assert [str(part.shard) for part in merged.parts] == ["1/3", "2/3", "3/3"]
+    assert (merged.matches, merged.leaks) == (36, whole.leaks)
+
+    # Every round's board, the matches and the Dodo's results are the unsharded run's.
+    assert standings_rows(out, merged.run_id) == standings_rows(tmp_path / "whole.db", whole.run_id)
+    assert rows(out, MATCH_ROWS, merged.run_id) == rows(
+        tmp_path / "whole.db", MATCH_ROWS, whole.run_id
+    )
+    assert rows(out, UTILITY_ROWS, merged.run_id) == rows(
+        tmp_path / "whole.db", UTILITY_ROWS, whole.run_id
+    )
+    assert merged.standings == whole.standings
+
+    async with CourtStore(out) as store:
+        events = await store.get_events_after(merged.run_id)
+        run = await store.get_run(merged.run_id)
+    check_run(events)
+    assert len({e.match.match_id for e in events if isinstance(e, MatchStarted)}) == 36
+    updates = [e for e in events if isinstance(e, StandingsUpdated)]
+    assert [u.round for u in updates] == [1, 2, 3, 3]
+    assert updates[-1].standings == whole.standings
+    assert run is not None and run.status == "finished" and run.config["shard"] is None
+    CourtConfig.model_validate(run.config)
+    jsonl = (out.parent / "runs" / f"{merged.run_id}.jsonl").read_text(encoding="utf-8")
+    assert len(jsonl.splitlines()) == len(events)
+
+
+@pytest.mark.asyncio
+async def test_merge_picks_runs_by_id_and_can_write_into_an_input(tmp_path: Path) -> None:
+    db = tmp_path / "court.db"
+    ids = [(await run_into(db, config(shard=f"{part}/2"))).run_id for part in (1, 2)]
+    with pytest.raises(MergeError, match="shard 1/2 is missing"):
+        await merge_runs([db], tmp_path / "out.db")  # only the latest run by default
+    merged = await merge_runs([db], db, run_ids=ids)
+    assert merged.matches == 16
+    with pytest.raises(MergeError, match="no run run-missing"):
+        await merge_runs([db], tmp_path / "out.db", run_ids=[*ids, "run-missing"])
+
+
+@pytest.mark.asyncio
+async def test_merge_refuses_parts_that_are_not_one_tournament(tmp_path: Path) -> None:
+    async def laptop(name: str, **settings: Any) -> Path:
+        db = tmp_path / name / "court.db"
+        await run_into(db, config(**settings))
+        return db
+
+    one = await laptop("one", shard="1/2")
+    again = await laptop("again", shard="1/2")
+    two = await laptop("two", shard="2/2")
+    other_seed = await laptop("seed", shard="2/2", seed=7)
+    thirds = await laptop("thirds", shard="2/3")
+    whole = await laptop("whole")
+    out = tmp_path / "out.db"
+
+    with pytest.raises(MergeError, match="overlap: 8 matches appear twice"):
+        await merge_runs([whole, two], out)
+
+    with pytest.raises(MergeError, match="shard 1/2 was given more than once"):
+        await merge_runs([one, again], out)
+    with pytest.raises(MergeError, match="different seed"):
+        await merge_runs([one, other_seed], out)
+    with pytest.raises(MergeError, match="different splits"):
+        await merge_runs([one, thirds], out)
+    with pytest.raises(MergeError, match="shard 2/2 is missing"):
+        await merge_runs([one], out)
+    partial = await merge_runs([one], out, partial=True)
+    assert partial.missing == ["2/2"]
+    assert (await merge_runs([one, two], out)).missing == []
+    with pytest.raises(FileNotFoundError):
+        await merge_runs([tmp_path / "nowhere.db"], out)
+
+
+@pytest.mark.asyncio
+async def test_merge_skips_runs_that_did_not_finish(tmp_path: Path) -> None:
+    class Broken(MockTarget):
+        async def respond(self, request: TargetRequest) -> TargetReply:
+            raise ConnectionError("Ollama isn't answering")
+
+    db = tmp_path / "court.db"
+    with pytest.raises(ConnectionError):
+        await run_into(db, config(shard="1/1"), target=Broken())
+    with pytest.raises(MergeError, match="has no finished run"):
+        await merge_runs([db], tmp_path / "out.db")

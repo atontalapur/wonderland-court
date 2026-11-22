@@ -47,7 +47,6 @@ from wonderland_court.contracts import (
     ScenarioId,
     Stakes,
     Standing,
-    StandingsUpdated,
     Target,
     TargetReply,
     TargetRequest,
@@ -62,7 +61,7 @@ from .defenses import DefenseModels, DefensePolicy, compose_defenses
 from .runner import EventLog, MatchResult, TrialResult, new_run_id, plan_matches, run_match
 from .scenarios import build_scenario
 from .scoring import Utility, compute_standings
-from .sharding import Shard
+from .sharding import Shard, publish_standings
 from .store import CourtStore, MatchRecord, RunRecord, UtilityResult
 from .targets import ChatClient
 
@@ -316,7 +315,7 @@ async def run_tournament(
             batch = await _all(play(spec) for spec in mine if spec.round == round)
             played += [result for result in batch if result is not None]
             standings = compute_standings(_records(played), defenses=defenses)
-            await _publish(store, events, round, standings)
+            await publish_standings(store, events, round, standings)
 
         if utility is not None and rounds:
             jobs = list(dict.fromkeys((spec.defense, spec.scenario) for spec in schedule))
@@ -332,7 +331,7 @@ async def run_tournament(
             if scored:
                 table = utility_table(scored)
                 standings = compute_standings(_records(played), defenses=defenses, utility=table)
-                await _publish(store, events, rounds[-1], standings)
+                await publish_standings(store, events, rounds[-1], standings)
 
         await events.emit(
             RunEnded, matches=len(played), leaks=sum(result.ended.broken for result in played)
@@ -408,13 +407,6 @@ async def _score_utility(
 
 def _records(played: Iterable[MatchResult]) -> list[MatchRecord]:
     return [MatchRecord.from_result(result.spec, result.ended) for result in played]
-
-
-async def _publish(
-    store: CourtStore, events: EventLog, round: int, standings: list[Standing]
-) -> None:
-    await store.upsert_standings(events.run_id, round, standings)
-    await events.emit(StandingsUpdated, round=round, standings=standings)
 
 
 async def _all(calls: Iterable[Coroutine[Any, Any, T]]) -> list[T]:
