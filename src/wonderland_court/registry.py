@@ -15,6 +15,9 @@ raises, so a bug never hides behind a fake. Each fallback logs a warning and has
 
 The attacker and judge fakes are good enough for First blood on llama3.1. The other four are
 provisional shapes: the owning issues (#21, #24, #13, #28) may change them here.
+
+`load_mutators` adds the Mad Hatter mutators that `wonderland_court.mutators` plugins register
+(see `engine/plugins.py`) to the built-in ones.
 """
 
 import importlib
@@ -23,7 +26,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
 
 from wonderland_court.config import CourtConfig
 from wonderland_court.contracts import (
@@ -41,10 +44,15 @@ from wonderland_court.contracts import (
     TargetReply,
     Verdict,
 )
+from wonderland_court.engine import plugins
+from wonderland_court.engine.plugins import PluginKind
 from wonderland_court.engine.policy import broken_rule
 from wonderland_court.engine.store import CourtStore, RemediationAdvice, RetrialComparison
 from wonderland_court.engine.targets import ChatClient
 from wonderland_court.llm import LLMClient
+
+if TYPE_CHECKING:
+    from wonderland_court.adversaries.ports import Mutator
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -321,3 +329,23 @@ def load_server_runner(config: CourtConfig, client: LLMClient) -> ServerRunner:
 
 def load_report_renderer(config: CourtConfig, client: LLMClient) -> ReportRenderer:
     return _load(REPORT_RENDERER, lambda: NotBuilt(REPORT_RENDERER), config=config, client=client)
+
+
+def load_mutators() -> "dict[str, Mutator]":
+    """Every Mad Hatter mutator by id: the built-in ones, then the mutator plugins.
+
+    A built-in id always wins, and a plugin that can't load is skipped with a warning. The
+    Cheshire Cat still draws only from `MutatorId`; this is where it can find the rest.
+    """
+    from wonderland_court.adversaries.mutators import MUTATOR_REGISTRY
+
+    mutators: dict[str, Mutator] = {key.value: mutate for key, mutate in MUTATOR_REGISTRY.items()}
+    for name in plugins.names(PluginKind.MUTATOR):
+        try:
+            mutate = plugins.load(PluginKind.MUTATOR, name)
+        except plugins.PluginError as exc:
+            log.warning("skipping a mutator plugin: %s", exc)
+            continue
+        if mutate is not None:
+            mutators[name] = cast("Mutator", mutate)
+    return mutators

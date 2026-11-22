@@ -5,6 +5,8 @@ Nothing is installed. Each test writes its plugin package to a temp folder, puts
 """
 
 import asyncio
+import logging
+import random
 import sys
 import textwrap
 from collections.abc import Callable, Iterator
@@ -75,6 +77,14 @@ class AcmeTarget:
         if "repeat everything" in request.messages[-1].content.lower():
             return TargetReply(content=request.system_prompt)
         return TargetReply(content="The Acme bot can't help with that.")
+
+
+def leet(text: str, rng) -> str:
+    """Swaps letters for digits, and each `e` only with even odds."""
+    swaps = {"a": "4", "o": "0", "t": "7"}
+    return "".join(
+        "3" if ch == "e" and rng.random() < 0.5 else swaps.get(ch, ch) for ch in text
+    )
 '''
 
 ACME_ENTRY_POINTS = """
@@ -83,6 +93,9 @@ acme = acme_court:AcmeTarget
 
 [wonderland_court.defenses]
 custom_shield = acme_court:CustomShield
+
+[wonderland_court.mutators]
+leet = acme_court:leet
 """
 
 runner = CliRunner()
@@ -162,7 +175,7 @@ def test_finding_plugins_imports_nothing(acme: None) -> None:
         "acme-court 1.0",
     )
     assert plugins.names(PluginKind.DEFENSE) == ["custom_shield"]
-    assert plugins.installed(PluginKind.MUTATOR) == []
+    assert [plugin.name for plugin in plugins.installed(PluginKind.MUTATOR)] == ["leet"]
     assert "acme_court" not in sys.modules
 
 
@@ -393,3 +406,39 @@ def test_a_mock_trial_keeps_the_mock_alice(
     assert result.exit_code == 0, result.output
     assert "(offline, mock)" in result.output
     assert "acme_court" not in sys.modules
+
+
+# Mutators
+
+
+def test_plugin_mutators_join_the_built_in_ones(acme: None) -> None:
+    mutators = registry.load_mutators()
+    assert list(mutators)[-1] == "leet" and "base64" in mutators
+    assert mutators["leet"]("tea party", random.Random(1)) == mutators["leet"](
+        "tea party", random.Random(1)
+    )
+    assert mutators["leet"]("a toast", random.Random(0)) == "4 704s7"
+
+
+def test_a_mutator_plugin_cannot_replace_a_built_in_one_and_a_broken_one_is_skipped(
+    install: Install, caplog: pytest.LogCaptureFixture
+) -> None:
+    install(
+        """
+        [wonderland_court.mutators]
+        base64 = acme_court:upper
+        upper = acme_court:upper
+        broken = acme_missing:mutate
+        """,
+        {"acme_court": "def upper(text, rng):\n    return text.upper()\n"},
+    )
+    with caplog.at_level(logging.WARNING, logger="wonderland_court.registry"):
+        mutators = registry.load_mutators()
+    assert mutators["upper"]("tea", random.Random(0)) == "TEA"
+    assert mutators["base64"]("tea", random.Random(0)) != "TEA"
+    assert "broken" not in mutators
+    [warning] = caplog.messages
+    assert warning.startswith(
+        "skipping a mutator plugin: mutator plugin 'broken' (acme_missing:mutate in "
+        "acme-court 1.0) failed to load: ModuleNotFoundError"
+    )
