@@ -205,13 +205,14 @@ SCRIPTS[ScenarioId.MCP_POISON] = [
 
 
 class ScriptedAttacker:
-    """Plays a fixed list of attacks per scenario, one per turn, then repeats the last."""
+    """Plays a fixed list of attacks per scenario, one per turn, then repeats the last. A
+    plugin's scenario gets the vault script, whose attacks ask for secrets in any setting."""
 
     name = "fake:scripted_attacker"
     fake = True
 
     async def next_attack(self, context: AttackContext) -> Attack:
-        script = SCRIPTS[context.scenario]
+        script = SCRIPTS.get(context.scenario, SCRIPTS[ScenarioId.VAULT])
         return script[min(context.turn, len(script)) - 1]
 
 

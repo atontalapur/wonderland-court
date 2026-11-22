@@ -48,6 +48,7 @@ from wonderland_court.engine.init_doctor import (
 )
 from wonderland_court.engine.mock import MockDefenseModel, MockTarget
 from wonderland_court.engine.runner import plan_matches
+from wonderland_court.engine.scenarios import BUILT_IN_SCENARIOS, build_scenario
 from wonderland_court.engine.sharding import MergeError, Shard, merge_runs
 from wonderland_court.engine.store import (
     CourtReader,
@@ -410,6 +411,9 @@ def trial(
             _fail(str(exc), code=2)
     defenses = _runnable_defenses(settings.defenses, kind, console)
     try:
+        for scenario in settings.scenarios:  # a broken scenario plugin is a usage error
+            if scenario not in BUILT_IN_SCENARIOS:
+                build_scenario(scenario, settings.seed)
         planned = plan_matches(
             settings,
             target=name,

@@ -6,11 +6,15 @@ scenario and the seed, so a retrial with the same seeds faces identical stakes.
 
 A canary is `WC-` followed by 8 lowercase hex characters of a SHA-256 over the scenario and
 seed, such as `WC-3f9a0c1e`. The output filter finds leaks by scanning for the `WC-` prefix.
+
+A `wonderland_court.scenarios` plugin adds a scenario next to these (see `plugins`). It is a
+builder like the ones in `_BUILDERS`: given the match's canary, it returns the definition.
 """
 
 import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 
 from wonderland_court.contracts import (
     Document,
@@ -21,6 +25,9 @@ from wonderland_court.contracts import (
     ToolRule,
     ToolSpec,
 )
+
+from . import plugins
+from .plugins import PluginKind
 
 CANARY_PREFIX = "WC-"
 CANARY_HEX_CHARS = 8
@@ -316,4 +323,38 @@ _BUILDERS: dict[ScenarioId, Callable[[str], ScenarioDefinition]] = {
 
 def build_scenario(scenario: ScenarioId, seed: int) -> ScenarioDefinition:
     """The scenario for one match. Same scenario and seed, same output."""
+    if scenario not in BUILT_IN_SCENARIOS:
+        return plugin_scenario(scenario, seed)
     return _BUILDERS[scenario](make_canary(scenario, seed))
+
+
+# Plugin scenarios
+
+BUILT_IN_SCENARIOS = frozenset(ScenarioId)
+"""Iterating `ScenarioId` skips the ids that plugins add."""
+
+
+def plugin_scenario(scenario: ScenarioId, seed: int) -> ScenarioDefinition:
+    """The scenario a `wonderland_court.scenarios` plugin builds from the match's canary.
+
+    Its stakes must name `scenario` and use that canary. Raises `PluginError` (a `ValueError`)
+    when the plugin can't load, raises or builds anything else.
+    """
+    canary = make_canary(scenario, seed)
+    built = plugins.build(
+        PluginKind.SCENARIO,
+        scenario.value,
+        canary,
+        check=lambda built: isinstance(built, ScenarioDefinition),
+        expected="a ScenarioDefinition",
+    )
+    plugin = plugins.find(PluginKind.SCENARIO, scenario.value)
+    if built is None or plugin is None:  # its package was uninstalled since the id was made
+        raise ValueError(f"no scenario plugin is named {scenario.value!r}")
+    definition = cast(ScenarioDefinition, built)
+    if (definition.stakes.scenario, definition.stakes.canary) != (scenario, canary):
+        raise plugin.error(
+            f"built stakes that don't use its own id and canary: they need "
+            f"scenario=ScenarioId({scenario.value!r}) and the canary it is given."
+        )
+    return definition
