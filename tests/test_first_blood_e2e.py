@@ -321,6 +321,8 @@ async def test_first_blood_streams_live_from_court_trial_to_the_courtroom(tmp_pa
         "match_started",
         *["attack", "reply", "verdict"] * 2,
         "match_ended",
+        "standings",  # the round's board
+        "standings",  # the final board, with the Dodo's utility
         "run_ended",
     ]
     started = events[1]
@@ -330,8 +332,7 @@ async def test_first_blood_streams_live_from_court_trial_to_the_courtroom(tmp_pa
     verdicts = [e.verdict for e in events if isinstance(e, VerdictRuled)]
     assert verdicts[0].ruling is Ruling.HELD
     assert (verdicts[1].ruling, verdicts[1].layer) == (Ruling.LEAK, JudgeLayer.TOOL_CALL)
-    ended = events[-2]
-    assert isinstance(ended, MatchEnded)
+    [ended] = [e for e in events if isinstance(e, MatchEnded)]
     assert (ended.broken, ended.broken_on_turn) == (True, 2)
 
     # The stream is live, in seq order, and the same as the database and the JSONL file.
