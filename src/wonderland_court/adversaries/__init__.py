@@ -11,6 +11,7 @@ from .bandit import (
 from .calibration import (
     CalibrationResult,
     calibrate,
+    calibrate_run,
 )
 from .caterpillar import (
     FailureCluster,
@@ -35,7 +36,7 @@ from .drink_me import (
     DrinkMeGenerator,
     HidingStyle,
 )
-from .evolution import PayloadEvolver
+from .evolution import Offspring, PayloadEvolver
 from .families import (
     FAMILIES,
     FamilyStrategy,
@@ -89,6 +90,7 @@ __all__ = [
     "FamilyStrategy",
     "HidingStyle",
     "MatchRecord",
+    "Offspring",
     "PayloadEvolver",
     "QueenJudge",
     "RavenFuzzer",
@@ -102,6 +104,7 @@ __all__ = [
     "WarmStart",
     "advise",
     "calibrate",
+    "calibrate_run",
     "cluster_failures",
     "compare_retrial",
     "decode_views",

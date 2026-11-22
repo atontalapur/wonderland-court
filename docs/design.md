@@ -62,7 +62,7 @@ Both the OpenAI and Anthropic SDKs use `httpx2`, not `httpx`, so `respx` can't i
 
 | Preset | Defenses | Scenarios | Rounds | Turns |
 | --- | --- | --- | --- | --- |
-| `first_blood` | `plain` | `vault` | 1 | 4 |
+| `first_blood` | `plain` | `refund_tool` | 1 | 4 |
 | `quick` | `plain`, `sandwich`, `spotlighting`, `spotlighting+guard+output_filter` | `vault`, `refund_tool` | 1 | 3 |
 | `full` | all seven, plus the stack | `vault`, `system_prompt`, `refund_tool`, `drink_me` | 3 | 6 |
 

@@ -263,16 +263,49 @@ async def run_trial(
     bound only keeps the event stream readable. The run's status ends as `finished`, or
     `failed` if anything raised; the first match error is re-raised as is.
     """
-    defenses = list(config.defenses if defenses is None else defenses)
     specs = plan_matches(
         config,
         target=target.name,
         target_kind=target.kind,
         attacker=attacker.name,
-        defenses=defenses,
+        defenses=list(config.defenses if defenses is None else defenses),
         families=families,
         mutators=mutators,
     )
+    return await run_matches(
+        config,
+        specs,
+        target=target,
+        attacker=attacker,
+        judge=judge,
+        store=store,
+        run_id=run_id,
+        concurrency=concurrency,
+        on_event=on_event,
+        clock=clock,
+    )
+
+
+async def run_matches(
+    config: CourtConfig,
+    specs: Sequence[MatchSpec],
+    *,
+    target: Target,
+    attacker: Attacker,
+    judge: Judge,
+    store: CourtStore,
+    run_id: str | None = None,
+    parent_run_id: str | None = None,
+    concurrency: int = 2,
+    on_event: Callable[[Event], None] | None = None,
+    clock: Callable[[], datetime] = _now,
+) -> TrialResult:
+    """Play `specs` as one run, the way `run_trial` plays its plan.
+
+    `court retrial` passes the baseline's specs with a hardened defense and `parent_run_id`
+    set to the baseline run. `config` is recorded as the run's config.
+    """
+    defenses = list(dict.fromkeys(spec.defense for spec in specs))
     run_id = run_id or new_run_id()
 
     log = EventLog(run_id, store.append_event, clock, listener=on_event)
@@ -283,6 +316,7 @@ async def run_trial(
             target=target.name,
             target_kind=target.kind,
             config=config.model_dump(mode="json"),
+            parent_run_id=parent_run_id,
         )
     )
     gate = asyncio.Semaphore(concurrency)

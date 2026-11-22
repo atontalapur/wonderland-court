@@ -11,10 +11,10 @@ The sample is stratified half LEAK and half HELD as far as the data allows, capp
 to HELD at the similarity layer) is not an LLM ruling, so it is left out of `llm_evaluated`
 and the agreement counts.
 
-This works over `run_view.MatchRecord`s. The `calibrate_run(run_id, store, queen, ...)`
-wrapper from issue #25, which loads a run from the Engine's `CourtStore` and saves the row to
-its `judge_calibration` table, waits on #7. `CalibrationResult.to_row()` already has that
-table's columns.
+`calibrate` works over `run_view.MatchRecord`s. `calibrate_run` loads one run from the
+Engine's `CourtStore`, calibrates it and saves the row to the `judge_calibration` table, where
+the Courtroom dashboard and reports read it. A run with no parseable LLM ruling gets no row:
+it shows as not calibrated rather than as 0% agreement.
 """
 
 from __future__ import annotations
@@ -26,9 +26,10 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from wonderland_court.contracts.models import JudgeLayer, Ruling, Stakes, Turn, Verdict
+from wonderland_court.engine.store import CourtStore, JudgeCalibration
 
 from .judge import QueenJudge
-from .run_view import MatchRecord
+from .run_view import MatchRecord, matches_from_events
 
 EXACT_LAYERS: frozenset[JudgeLayer] = frozenset({JudgeLayer.CANARY, JudgeLayer.TOOL_CALL})
 """Layers whose verdicts are ground truth."""
@@ -61,6 +62,24 @@ class CalibrationResult:
 
     def to_row(self) -> dict[str, Any]:
         return asdict(self)
+
+    def to_judge_calibration(self) -> JudgeCalibration | None:
+        """The store's row, or None when `agreement_rate` is None.
+
+        The store and the Courtroom read `agreement_rate` as a number from 0 to 1. With no
+        LLM ruling there is no rate, and 0.0 would read as a judge that always disagrees.
+        """
+        if self.agreement_rate is None:
+            return None
+        return JudgeCalibration(
+            run_id=self.run_id,
+            total_exact_checked=self.total_exact_checked,
+            llm_evaluated=self.llm_evaluated,
+            agreement_count=self.agreement_count,
+            agreement_rate=self.agreement_rate,
+            false_positives=self.false_positives,
+            false_negatives=self.false_negatives,
+        )
 
 
 def exact_turns(records: Sequence[MatchRecord]) -> list[ExactSample]:
@@ -144,3 +163,28 @@ async def calibrate(
         false_positives=false_positives,
         false_negatives=false_negatives,
     )
+
+
+async def calibrate_run(
+    run_id: str,
+    store: CourtStore,
+    queen: QueenJudge,
+    *,
+    sample_size: int = 30,
+    seed: int = 42,
+) -> CalibrationResult:
+    """Calibrate one recorded run and save the result to the store's `judge_calibration`.
+
+    The run's events are rebuilt with `matches_from_events` and passed to `calibrate`. The
+    row replaces any earlier one for the run, and is skipped when `agreement_rate` is None
+    (see `CalibrationResult.to_judge_calibration`). Give `queen` the shared rate-limited
+    client as its `llm`. Raises ValueError when the run has no recorded matches.
+    """
+    records = matches_from_events(await store.get_events_after(run_id))
+    if not records:
+        raise ValueError(f"no matches recorded for run {run_id!r}")
+    result = await calibrate(records, queen, sample_size=sample_size, seed=seed)
+    row = result.to_judge_calibration()
+    if row is not None:
+        await store.save_judge_calibration(row)
+    return result
