@@ -54,9 +54,9 @@ class PluginKind(StrEnum):
 class PluginError(ValueError):
     """A plugin that can't be used. The message names the entry point and its package."""
 
-    def __init__(self, message: str, problem: str) -> None:
+    def __init__(self, message: str, problem: str | None = None) -> None:
         super().__init__(message)
-        self.problem = problem
+        self.problem = problem or message
         """What is wrong, without the plugin's name, for `court plugins`."""
 
 

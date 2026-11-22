@@ -6,6 +6,7 @@ Nothing is installed. Each test writes its plugin package to a temp folder, puts
 
 import asyncio
 import logging
+import pickle
 import random
 import sys
 import textwrap
@@ -245,6 +246,11 @@ def test_a_broken_plugin_says_what_is_wrong(
         plugins.load(PluginKind.DEFENSE, found.name)
     assert caught.value.problem.startswith(problem)
     assert plugins.problem(found) == caught.value.problem
+
+
+def test_a_plugin_error_survives_pickling() -> None:
+    error = pickle.loads(pickle.dumps(PluginError("defense plugin 'moat' failed", "failed")))
+    assert str(error) == "defense plugin 'moat' failed"
 
 
 def test_built_in_names_win(install: Install) -> None:
