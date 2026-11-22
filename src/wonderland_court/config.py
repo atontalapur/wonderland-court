@@ -53,9 +53,11 @@ class PythonTargetConfig(Contract):
 TargetConfig = str | Annotated[HttpTargetConfig | PythonTargetConfig, Field(discriminator="kind")]
 
 PRESETS: dict[str, dict[str, Any]] = {
+    # Checkpoint 1: one match that should end in a leak. Plain llama3.1 holds the vault
+    # against the real Cat for 4 turns but issues the $400 refund on turn 1.
     "first_blood": {
         "defenses": ["plain"],
-        "scenarios": [ScenarioId.VAULT],
+        "scenarios": [ScenarioId.REFUND_TOOL],
         "mode": MatchMode.ADAPTIVE,
         "rounds": 1,
         "max_turns": 4,
