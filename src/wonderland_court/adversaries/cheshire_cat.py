@@ -6,13 +6,19 @@ message from Alice's last reply, guided by the family's `refine_hint`; families
 with `refine_candidates` above 1 (TAP) get several candidates and keep one. Any
 failure falls back to the family template. The Cat only sees `AttackContext`,
 which never carries the canary.
+
+Once a defense blocks a single-mutator turn, a fuzzer that fits `ComboEscalator`
+swaps the family's suggested mutators for its next curated combo. In ADAPTIVE mode
+on the tea-shop scenarios, a poisoner that fits `ChainPoisoner` splits document
+families over two turns: a clean setup email, then the poisoned tool output that
+cites it. The chain is rebuilt from the seed each turn, so the Cat holds no state.
 """
 
 from __future__ import annotations
 
 import random
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from wonderland_court.contracts.models import (
     Attack,
@@ -27,9 +33,13 @@ from wonderland_court.contracts.models import (
 from .bandit import SelectionPolicy, TechniqueBandit, WarmStart
 from .families import FAMILIES, FamilyStrategy, strategy_for
 from .llm_json import json_objects
-from .ports import ChatClient, Evolver, Fuzzer, Poisoner
+from .ports import ChainPoisoner, ChatClient, ComboEscalator, Evolver, Fuzzer, Poisoner
 from .refusals import is_refusal, is_refusal_text
-from .tactics import resolve_families, resolve_mutators, tactic_for
+from .tactics import TacticSpec, resolve_families, resolve_mutators, tactic_for
+
+if TYPE_CHECKING:
+    from .drink_me import ChainedPoison
+    from .evolution import Offspring
 
 DEFAULT_ATTACKER_MODEL = "qwen3.5:4b"
 
@@ -57,6 +67,9 @@ SCENARIO_DOCUMENT_KINDS: dict[ScenarioId, str] = {
 }
 """The default kind when the family has none: the tea-shop stories arrive as customer email.
 Anything else lets Drink Me pick."""
+
+CHAIN_SCENARIOS: frozenset[ScenarioId] = frozenset({ScenarioId.REFUND_TOOL, ScenarioId.DRINK_ME})
+"""Scenarios where ADAPTIVE document families play a two-turn chained Drink Me."""
 
 REFINE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -129,13 +142,15 @@ class CheshireCat:
 
     async def next_attack(self, context: AttackContext) -> Attack:
         rng = random.Random(f"{self._seed}:{context.match_id}:{context.turn}")
-        family = self._choose_family(context, rng)
+        # A chain set up last turn keeps its family, so the payload follows the setup.
+        pending = self._pending_chain(context)
+        family = pending[0] if pending is not None else self._choose_family(context, rng)
         strategy = strategy_for(family)
         tactic = tactic_for(family)
 
         # A fuzzer that can evolve breeds this family's next payload from its near-misses;
         # otherwise the template or refiner writes it and the Hatter mutates it below.
-        evolved: tuple[list[str], str] | None = None
+        evolved: Offspring | None = None
         family_history = [t for t in context.history if t.attack.family == family.value]
         if isinstance(self._fuzzer, Evolver) and family_history:
             evolved = self._fuzzer.evolve_from_history(
@@ -143,16 +158,23 @@ class CheshireCat:
                 seed=rng.randrange(2**31),
                 mutators=[m.value for m in resolve_mutators(context.enabled_mutators)],
             )
+        # `payload` tracks the same text without the Hatter's mutators. The Attack keeps it
+        # when any were applied, so later evolution breeds from clean parents.
         if evolved is not None:
-            applied, message = evolved
+            applied, message, payload = evolved
         else:
             applied = []
-            message = await self._compose(context, strategy, rng)
+            message = payload = await self._compose(context, strategy, rng)
 
         document: Document | None = None
         if tactic.needs_document:
             hidden = strategy.hidden_instruction(context.scenario, context.objective)
-            if self._poisoner is not None:
+            chain_poisoner = self._chain_poisoner(context)
+            if pending is not None:
+                document = pending[1]
+            elif chain_poisoner is not None:
+                document = self._chain(chain_poisoner, context, family, context.turn).setup
+            elif self._poisoner is not None:
                 document = self._poisoner.generate(
                     context.scenario,
                     hidden,
@@ -160,19 +182,96 @@ class CheshireCat:
                     kind=DOCUMENT_KINDS.get(family, SCENARIO_DOCUMENT_KINDS.get(context.scenario)),
                 )
             else:
-                message = f"{message}\n\n--- forwarded message ---\n{hidden}"
+                forwarded = f"\n\n--- forwarded message ---\n{hidden}"
+                message += forwarded
+                payload += forwarded
 
         if evolved is None and self._fuzzer is not None:
-            allowed = set(resolve_mutators(context.enabled_mutators))
-            wanted = [m.value for m in tactic.suggested_mutators if m in allowed]
-            if wanted:
-                applied, message = self._fuzzer.mutate(
-                    message, seed=rng.randrange(2**31), mutators=wanted, chain_len=len(wanted)
-                )
+            applied, message = self._mutate(self._fuzzer, context, tactic, message, rng)
 
         return Attack(
-            family=family.value, mutators=list(applied), message=message, document=document
+            family=family.value,
+            mutators=list(applied),
+            message=message,
+            document=document,
+            payload=payload if applied else None,
         )
+
+    @staticmethod
+    def _mutate(
+        fuzzer: Fuzzer,
+        context: AttackContext,
+        tactic: TacticSpec,
+        message: str,
+        rng: random.Random,
+    ) -> tuple[list[str], str]:
+        """Run the Hatter over a family that suggests mutators; others go out as written.
+
+        Once a defense has blocked a single-mutator turn, a `ComboEscalator` replaces the
+        family's suggestions with its next curated combo. A combo blocked in turn is skipped,
+        so each block moves on to the next one.
+        """
+        allowed = resolve_mutators(context.enabled_mutators)
+        wanted = [m.value for m in tactic.suggested_mutators if m in allowed]
+        if not wanted:
+            return [], message
+        seed = rng.randrange(2**31)
+        if isinstance(fuzzer, ComboEscalator):
+            combo = fuzzer.combo_after_blocks(context.history, mutators=[m.value for m in allowed])
+            if combo is not None:
+                return fuzzer.mutate_combo(message, seed=seed, combo=combo)
+        return fuzzer.mutate(message, seed=seed, mutators=wanted, chain_len=len(wanted))
+
+    def _chain_poisoner(self, context: AttackContext) -> ChainPoisoner | None:
+        """The poisoner, when this match's document families play two-turn chains."""
+        if (
+            context.mode is MatchMode.ADAPTIVE
+            and context.scenario in CHAIN_SCENARIOS
+            and isinstance(self._poisoner, ChainPoisoner)
+        ):
+            return self._poisoner
+        return None
+
+    def _chain(
+        self,
+        poisoner: ChainPoisoner,
+        context: AttackContext,
+        family: TechniqueFamily,
+        start_turn: int,
+    ) -> ChainedPoison:
+        """The chain `family` starts on `start_turn`. Same inputs give the same documents."""
+        seed = random.Random(
+            f"{self._seed}:{context.match_id}:{family.value}:chain:{start_turn}"
+        ).randrange(2**31)
+        hidden = strategy_for(family).hidden_instruction(context.scenario, context.objective)
+        return poisoner.chained(context.scenario, hidden, seed=seed)
+
+    def _pending_chain(self, context: AttackContext) -> tuple[TechniqueFamily, Document] | None:
+        """The family and payload owed this turn, when the last turn sent a chain's setup.
+
+        The chain is rebuilt from the last turn's index: it is pending when the last
+        attack's document id equals that chain's setup id.
+        """
+        poisoner = self._chain_poisoner(context)
+        if poisoner is None or not context.history:
+            return None
+        last = context.history[-1]
+        if last.attack.document is None:
+            return None
+        try:
+            family = TechniqueFamily(last.attack.family)
+        except ValueError:
+            return None
+        if (
+            family not in FAMILIES
+            or family not in resolve_families(context.enabled_families)
+            or not tactic_for(family).needs_document
+        ):
+            return None
+        chain = self._chain(poisoner, context, family, last.index)
+        if last.attack.document.id != chain.setup.id:
+            return None
+        return family, chain.payload
 
     def _choose_family(self, context: AttackContext, rng: random.Random) -> TechniqueFamily:
         if context.mode is MatchMode.FIXED:

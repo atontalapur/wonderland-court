@@ -26,7 +26,7 @@ WIDE = {"COLUMNS": "200", "NO_COLOR": "1"}
 FAKE_RUN = Path(__file__).resolve().parents[1] / "fixtures" / "fake_run.jsonl"
 
 COMMANDS = ["init", "doctor", "trial", "serve", "report", "ci", "advise", "retrial"]
-STUBS = ["init", "doctor", "ci"]
+STUBS = ["ci"]
 
 
 def invoke(*args: str) -> Result:
@@ -451,7 +451,7 @@ def test_fixed_mode_without_a_family_is_a_usage_error(
         ("target: llama3.1\ndefenses: ['plain!']\n", "bad defense name"),
         ("target: llama3.1\ndefenses: [plain+moat]\n", "unknown defense 'moat'"),
         ("target: llama3.1\ndefenses: [plain, spotlighting+moat]\n", "unknown defense 'moat'"),
-        ("target: 'python:my_agent:respond'\n", "agent target"),
+        ("target: 'python:my_agent:respond'\n", "can't import 'my_agent'"),
     ],
 )
 def test_bad_court_yaml_is_a_usage_error(

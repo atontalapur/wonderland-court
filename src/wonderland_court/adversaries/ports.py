@@ -5,23 +5,30 @@
 client fits without importing anything from here, and tests can pass fakes.
 
 `Fuzzer` and `Poisoner` are the Mad Hatter and Drink Me seams the Cheshire Cat
-calls. The Cat depends on these, not on the concrete classes.
+calls. The Cat depends on these, not on the concrete classes. `Evolver`,
+`ComboEscalator` and `ChainPoisoner` are optional extras the Cat checks with
+`isinstance`, so a plain `Fuzzer` or `Poisoner` still fits.
 """
 
 from __future__ import annotations
 
 import random
 from collections.abc import Callable
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from wonderland_court.contracts.models import (
     Document,
     Message,
+    MutatorId,
     ScenarioId,
     TargetReply,
     ToolSpec,
     Turn,
 )
+
+if TYPE_CHECKING:
+    from .drink_me import ChainedPoison
+    from .evolution import Offspring
 
 Mutator = Callable[[str, random.Random], str]
 """A pure text transform. Same text and same seed give the same output."""
@@ -81,11 +88,26 @@ class Fuzzer(Protocol):
 
 @runtime_checkable
 class Evolver(Protocol):
-    """A fuzzer that can also breed a payload from a match's near-miss turns."""
+    """A fuzzer that can also breed a payload from a match's near-miss turns. The
+    `Offspring` keeps the clean crossover next to the mutated message."""
 
     def evolve_from_history(
         self, history: list[Turn], *, seed: int, mutators: list[str] | None = None
-    ) -> tuple[list[str], str] | None: ...
+    ) -> Offspring | None: ...
+
+
+@runtime_checkable
+class ComboEscalator(Protocol):
+    """A fuzzer that can also escalate to a curated two-step combo once single mutators
+    get blocked."""
+
+    def combo_after_blocks(
+        self, history: list[Turn], *, mutators: list[str] | None = None
+    ) -> tuple[MutatorId, MutatorId] | None: ...
+
+    def mutate_combo(
+        self, payload: str, *, seed: int, combo: tuple[MutatorId, MutatorId]
+    ) -> tuple[list[str], str]: ...
 
 
 class Poisoner(Protocol):
@@ -99,3 +121,13 @@ class Poisoner(Protocol):
         seed: int,
         kind: str | None = None,
     ) -> Document: ...
+
+
+@runtime_checkable
+class ChainPoisoner(Protocol):
+    """A poisoner that can also split an injection over two turns: a clean setup document,
+    then a poisoned payload that points back at it."""
+
+    def chained(
+        self, scenario: ScenarioId, hidden_instruction: str, *, seed: int
+    ) -> ChainedPoison: ...

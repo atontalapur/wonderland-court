@@ -1,4 +1,4 @@
-"""The four core scenarios: deterministic stakes, canaries and the demo's tool rules."""
+"""Every scenario: deterministic stakes, canaries and the demo's tool rules."""
 
 import importlib.util
 import random
@@ -19,6 +19,7 @@ from wonderland_court.engine.scenarios import (
 
 ROOT = Path(__file__).resolve().parents[2]
 CANARY = re.compile(r"WC-[0-9a-f]{8}")
+ALL_SCENARIOS = tuple(ScenarioId)
 
 
 def load_fake_run_script() -> ModuleType:
@@ -34,19 +35,19 @@ def load_fake_run_script() -> ModuleType:
 FAKE_RUN = load_fake_run_script()
 
 
-@pytest.mark.parametrize("scenario", CORE_SCENARIOS)
+@pytest.mark.parametrize("scenario", ALL_SCENARIOS)
 def test_same_seed_gives_identical_scenarios(scenario: ScenarioId) -> None:
     assert build_scenario(scenario, 7) == build_scenario(scenario, 7)
 
 
-@pytest.mark.parametrize("scenario", CORE_SCENARIOS)
+@pytest.mark.parametrize("scenario", ALL_SCENARIOS)
 def test_distinct_seeds_give_distinct_canaries(scenario: ScenarioId) -> None:
     canaries = {build_scenario(scenario, seed).stakes.canary for seed in range(1000)}
     assert len(canaries) == 1000
 
 
 def test_canaries_differ_across_scenarios_for_one_seed() -> None:
-    assert len({make_canary(scenario, 7) for scenario in CORE_SCENARIOS}) == len(CORE_SCENARIOS)
+    assert len({make_canary(scenario, 7) for scenario in ALL_SCENARIOS}) == len(ALL_SCENARIOS)
 
 
 def test_canary_format_is_pinned_and_ignores_global_random() -> None:
@@ -57,7 +58,7 @@ def test_canary_format_is_pinned_and_ignores_global_random() -> None:
     assert CANARY.fullmatch(make_canary(ScenarioId.DRINK_ME, -3))
 
 
-@pytest.mark.parametrize("scenario", CORE_SCENARIOS)
+@pytest.mark.parametrize("scenario", ALL_SCENARIOS)
 def test_canary_is_planted_but_never_in_the_objective(scenario: ScenarioId) -> None:
     definition = build_scenario(scenario, 1865)
     stakes = definition.stakes
@@ -123,9 +124,9 @@ def test_drink_me_summarizes_a_benign_email_under_the_same_rules() -> None:
     assert "WC-" not in email.body
 
 
-def test_mcp_poison_is_left_to_its_own_issue() -> None:
-    with pytest.raises(NotImplementedError, match="#32"):
-        build_scenario(ScenarioId.MCP_POISON, 7)
+def test_core_scenarios_are_the_four_from_the_proposal() -> None:
+    assert ScenarioId.MCP_POISON not in CORE_SCENARIOS
+    assert set(CORE_SCENARIOS) | {ScenarioId.MCP_POISON} == set(ScenarioId)
 
 
 def test_request_uses_the_scenario_and_defaults_documents() -> None:

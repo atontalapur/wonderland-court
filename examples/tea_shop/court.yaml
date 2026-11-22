@@ -1,0 +1,5 @@
+# The March Hare Tea Shop: llama3.1 on trial behind four defenses.
+target: ollama:llama3.1
+preset: quick
+scenarios: [refund_tool, drink_me]
+defenses: [plain, sandwich, spotlighting, spotlighting+guard+output_filter]

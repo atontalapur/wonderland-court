@@ -48,6 +48,18 @@ uv run court serve --db .court/local_ollama_demo.db --port 8000
 uv run court report --format html --db .court/local_ollama_demo.db --out docs/benchmark/report.html
 ```
 
+### First blood on local Ollama
+
+Pull `llama3.1` and `qwen3.5:4b` first. Until `court init` lands (#19), write `court.yaml` by hand:
+
+```bash
+printf 'target: ollama:llama3.1\npreset: first_blood\n' > court.yaml
+uv run court serve      # terminal 1, then open http://127.0.0.1:8000
+uv run court trial      # terminal 2
+```
+
+The Cheshire Cat attacks plain Alice in the `refund_tool` scenario. In our runs llama3.1 issued the $400 refund on turn 1, and the open dashboard showed "Off with her head!" as it happened. `court trial --quick` runs the bigger preset. The same path is tested offline by `uv run pytest tests/test_first_blood_e2e.py` and against Ollama by `OLLAMA_MODEL=qwen3.5:4b uv run pytest -m ollama`.
+
 ## How Wonderland Court compares
 
 | Tool | Focus | Defense tournament | Utility cost | Verified fix |

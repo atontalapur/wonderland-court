@@ -36,6 +36,14 @@ from wonderland_court.contracts import (
 )
 from wonderland_court.engine.cache import SQLiteResponseCache
 from wonderland_court.engine.defenses import parse_defenses
+from wonderland_court.engine.init_doctor import (
+    OllamaUnreachable,
+    doctor_ok,
+    doctor_table,
+    list_ollama_models,
+    run_doctor,
+    write_court_yaml,
+)
 from wonderland_court.engine.mock import MockTarget
 from wonderland_court.engine.runner import TrialResult, plan_matches, run_trial
 from wonderland_court.engine.store import (
@@ -45,7 +53,7 @@ from wonderland_court.engine.store import (
     RetrialComparison,
     RunRecord,
 )
-from wonderland_court.engine.targets import build_target, canonical_spec
+from wonderland_court.engine.targets import build_target, canonical_spec, is_agent_target
 from wonderland_court.llm import RateLimitedLLMClient, default_client, set_default_client
 
 app = typer.Typer(
@@ -111,16 +119,37 @@ def main(
 
 @app.command()
 def init(
+    config: ConfigOption = DEFAULT_CONFIG,
     force: Annotated[bool, typer.Option(help="Overwrite an existing court.yaml.")] = False,
 ) -> None:
     """Write court.yaml and find your Ollama models."""
-    _not_built("init", "Engine, #19")
+    if config.exists() and not force:
+        _fail(f"{config} already exists. Pass --force to overwrite it.")
+    installed: list[str] | None
+    try:
+        installed = list_ollama_models()
+    except OllamaUnreachable as exc:
+        installed = None
+        typer.echo(f"Note: {exc}, so court.yaml uses the default models.")
+    text = write_court_yaml(config, installed, force=True)
+    typer.echo(f"Wrote {config}:\n\n{text}")
+    typer.echo("Next: `court doctor` checks Ollama and the models, then run `court trial`.")
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    pull: Annotated[
+        bool, typer.Option(help="Run `ollama pull` for the models that are missing.")
+    ] = False,
+) -> None:
     """Check Ollama and pull the judge and guard models."""
-    _not_built("doctor", "Engine, #19")
+    checks = run_doctor(pull=pull)
+    console = Console()
+    console.print(doctor_table(checks))
+    if not doctor_ok(checks):
+        console.print("Some checks failed. Each row's Fix column says what to do.")
+        raise typer.Exit(code=1)
+    console.print("Ready for `court trial`.")
 
 
 # court trial
@@ -133,8 +162,8 @@ def _trial_settings(path: Path, *, quick: bool, mock: bool) -> CourtConfig:
     _missing(path)
     if not mock:
         _fail(
-            f"No {path} here. Write one (court init arrives with #19), or try an offline "
-            "run with `court trial --quick --mock`."
+            f"No {path} here. Write one with `court init`, or try an offline run with "
+            "`court trial --quick --mock`."
         )
     return CourtConfig.from_mapping({"target": MockTarget.name}, preset)
 
@@ -181,10 +210,42 @@ class _Reporter:
             self._progress.advance(self._task)
 
 
+async def _calibrate(run_id: str, store: CourtStore, judge: Judge, console: Console) -> None:
+    """Check the Queen's LLM layer against the run's exact rulings and save the row the
+    Courtroom shows. The run is already recorded, so a failure here only prints a warning."""
+    from wonderland_court.adversaries import calibration
+    from wonderland_court.adversaries.judge import QueenJudge
+
+    if not isinstance(judge, QueenJudge) or judge.llm is None:
+        return  # the fake judge has no LLM layer
+    try:
+        with console.status("Checking the judge against the exact rulings..."):
+            result = await calibration.calibrate_run(run_id, store, judge)
+    except Exception as exc:
+        console.print(
+            f"[yellow]Judge calibration failed: {escape(f'{type(exc).__name__}: {exc}')}[/]"
+        )
+        return
+    if result.agreement_rate is not None:
+        console.print(
+            "Judge calibration: the LLM judge agreed with the exact rulings on "
+            f"{result.agreement_count} of {result.llm_evaluated} sampled turns "
+            f"({result.agreement_rate:.0%}), {result.false_positives} false positives, "
+            f"{result.false_negatives} false negatives."
+        )
+    elif result.total_exact_checked == 0:
+        console.print("Judge calibration skipped: no turn was ruled by the canary or tool checks.")
+    else:
+        console.print(
+            "[yellow]Judge calibration not saved: the LLM judge gave no readable ruling.[/]"
+        )
+
+
 async def _trial(
     settings: CourtConfig,
     *,
     mock: bool,
+    agent: Target | None,
     defenses: list[str],
     families: list[TechniqueFamily],
     mutators: list[MutatorId],
@@ -203,10 +264,13 @@ async def _trial(
                 registry.CanaryJudge(),
             )
         else:
-            assert isinstance(settings.target, str)
             client = RateLimitedLLMClient(cache=SQLiteResponseCache(store))
-            set_default_client(client)
-            target = build_target(settings.target, client)
+            set_default_client(client)  # a Python agent may borrow it, as the tea shop's does
+            if agent is not None:
+                target = agent
+            else:
+                assert isinstance(settings.target, str)
+                target = build_target(settings.target, client)
             attacker = registry.load_attacker(settings, client)
             judge = registry.load_judge(settings, client)
         with Progress(console=console, transient=True) as progress:
@@ -221,6 +285,7 @@ async def _trial(
                 mutators=mutators,
                 on_event=_Reporter(progress, total),
             )
+        await _calibrate(result.run_id, store, judge, console)
     return result, jsonl_dir / f"{result.run_id}.jsonl"
 
 
@@ -268,16 +333,21 @@ def trial(
     settings = settings.model_copy(update=updates)
     families, mutators = family or [], mutator or []
 
+    # An agent is built here, so a bad entrypoint, URL or ${ENV_VAR} is a usage error. A model
+    # target waits for the run's rate-limited client.
+    agent: Target | None = None
     if mock:
-        name = MockTarget.name
-    elif not isinstance(settings.target, str):
-        _fail("HTTP and Python agent targets arrive with #19. Use a model target for now.")
+        name, kind = MockTarget.name, MockTarget.kind
     else:
         try:
-            name = canonical_spec(settings.target)
+            if is_agent_target(settings.target):
+                agent = build_target(settings.target)
+                name, kind = agent.name, agent.kind
+            else:
+                assert isinstance(settings.target, str)
+                name, kind = canonical_spec(settings.target), TargetKind.MODEL
         except ValueError as exc:
             _fail(str(exc), code=2)
-    kind = TargetKind.MODEL  # agent targets arrive with #19
     defenses = _runnable_defenses(settings.defenses, kind, console)
     try:
         planned = plan_matches(
@@ -298,6 +368,7 @@ def trial(
             _trial(
                 settings,
                 mock=mock,
+                agent=agent,
                 defenses=defenses,
                 families=families,
                 mutators=mutators,
@@ -308,10 +379,12 @@ def trial(
     except Exception as exc:
         if mock:
             raise  # nothing outside Court runs in a mock trial, so this is a bug: keep the trace
+        check = "Run `court doctor` to check that Ollama is running and the models are pulled."
+        if kind is TargetKind.AGENT:
+            check = f"Check that {name} is working. {check}"
         _fail(
             f"The trial stopped: {type(exc).__name__}: {exc}\n"
-            f"The run is marked failed in {settings.db_path}. Check that Ollama is running and "
-            "the models are pulled (`ollama list`); `court doctor` will check this (#19)."
+            f"The run is marked failed in {settings.db_path}. {check}"
         )
     console.print(
         f"\n{result.leaks} of {len(result.matches)} matches leaked. Run [bold]{result.run_id}[/]"
