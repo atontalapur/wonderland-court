@@ -37,7 +37,7 @@
      ```bash
      court serve --replay fixtures/fake_run.jsonl --speed 4.0
      ```
-     *(Replays the exact Turn 1 `role_play` held -> Turn 2 `Drink Me` email + `spotlighting+guard+output_filter` beat below; for the recorded local `ollama:qwen2.5:7b-instruct` run, swap `--replay docs/benchmark/demo_run.jsonl`.)*
+     *(Replays the exact Turn 1 `role_play` held -> Turn 2 `Drink Me` email + `spotlighting+guard+output_filter` beat below; for the recorded 3-laptop `ollama:llama3.1` benchmark, swap `--replay docs/benchmark/demo_run.jsonl`.)*
    - Keep the **60-second backup video** queued in QuickTime / VLC and `docs/demo/fallback_slide.md` exported as a single PDF/PNG slide on Desktop.
 
 ---
@@ -102,7 +102,7 @@
 - **Say:**
   > "Running `court advise` invokes the **Caterpillar**, which turns those failure families into a hardened configuration patch.
   >
-  > Then `court retrial` replays the **exact same attack seeds** against the hardened stack. Attack success drops sharply—from `75.0%` to `0.0%` (`-75.0` pp on local `qwen2.5:7b-instruct`)—while **Dodo utility** sits right beside it at `100.0%` to prove we didn't break the tea shop bot."
+  > Then `court retrial` replays the **exact same attack seeds** against the hardened stack. Attack success drops from `75%` to `0%` on the same 8 seeds against local `llama3.1`. And **Dodo utility** sits right beside it: `34%` to `25%`. The guard that stops the attack also turns away one honest refund in four, and we show you that cost instead of hiding it."
 - **Handoff:** `"@atontalapur, take it to CI."`
 
 ---
@@ -127,7 +127,7 @@ Trigger **immediately** (do not debug live for more than 5 seconds):
      ```bash
      court serve --replay fixtures/fake_run.jsonl --speed 4.0
      ```
-     *(Matches the canonical Turn 1 -> Turn 2 `Drink Me` email script beats; or pass `--replay docs/benchmark/demo_run.jsonl` for the local `ollama:qwen2.5:7b-instruct` run.)*
+     *(Matches the canonical Turn 1 -> Turn 2 `Drink Me` email script beats; or pass `--replay docs/benchmark/demo_run.jsonl` for the recorded 3-laptop `ollama:llama3.1` benchmark.)*
    - Refresh `http://127.0.0.1:8000` and narrate the exact same script beats at 4x replay speed:
      > *"To keep inside three minutes, here is the recorded run streaming at 4x speed through the exact same Courtroom UI."*
 2. **Level 2 — Local Server / Browser Crash:**
@@ -146,5 +146,5 @@ Record at `1920x1080`, `18pt+` terminal font, zero audio (live narration over pl
 | **0:00 – 0:10** | Editor + Terminal | 5-line `court.yaml` + `court trial --quick` launching local Ollama matches. |
 | **0:10 – 0:25** | Courtroom Live Feed | Turn 1 (`role_play` -> `held`) followed by Turn 2 (`Drink Me` email -> `issue_refund(400)` -> Queen **"Off with her head!"**). |
 | **0:25 – 0:38** | Leaderboard + Heatmap | Ranked defense rows (`Elo`, `ASR ± 95% CI`, `Dodo Utility`, `Judge Calibration`) + Defense × Technique Heatmap + failure clusters. |
-| **0:38 – 0:50** | `court advise` + `court retrial` | Caterpillar hardened config output -> `court retrial` same-seed comparison showing ASR drop with Dodo utility preserved. |
+| **0:38 – 0:50** | `court advise` + `court retrial` | Caterpillar hardened config output -> `court retrial` same-seed comparison showing the ASR drop with Dodo utility beside it. |
 | **0:50 – 0:60** | `court ci` + Install | `court ci --fail-above 0.10` non-zero exit + GitHub Code Scanning SARIF alert + `pipx install git+https://github.com/atontalapur/wonderland-court`. |
