@@ -207,6 +207,8 @@ async def test_missing_db_graceful_startup(tmp_path: Path) -> None:
             "mode": "live",
             "db_ready": False,
             "replay_speed": 4.0,
+            "studio_enabled": True,
+            "active_run_id": None,
         }
 
         runs = await client.get("/api/runs")
