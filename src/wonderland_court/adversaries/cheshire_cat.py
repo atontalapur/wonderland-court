@@ -39,6 +39,7 @@ from .tactics import TacticSpec, resolve_families, resolve_mutators, tactic_for
 
 if TYPE_CHECKING:
     from .drink_me import ChainedPoison
+    from .evolution import Offspring
 
 DEFAULT_ATTACKER_MODEL = "qwen3.5:4b"
 
@@ -149,7 +150,7 @@ class CheshireCat:
 
         # A fuzzer that can evolve breeds this family's next payload from its near-misses;
         # otherwise the template or refiner writes it and the Hatter mutates it below.
-        evolved: tuple[list[str], str] | None = None
+        evolved: Offspring | None = None
         family_history = [t for t in context.history if t.attack.family == family.value]
         if isinstance(self._fuzzer, Evolver) and family_history:
             evolved = self._fuzzer.evolve_from_history(
@@ -157,11 +158,13 @@ class CheshireCat:
                 seed=rng.randrange(2**31),
                 mutators=[m.value for m in resolve_mutators(context.enabled_mutators)],
             )
+        # `payload` tracks the same text without the Hatter's mutators. The Attack keeps it
+        # when any were applied, so later evolution breeds from clean parents.
         if evolved is not None:
-            applied, message = evolved
+            applied, message, payload = evolved
         else:
             applied = []
-            message = await self._compose(context, strategy, rng)
+            message = payload = await self._compose(context, strategy, rng)
 
         document: Document | None = None
         if tactic.needs_document:
@@ -179,13 +182,19 @@ class CheshireCat:
                     kind=DOCUMENT_KINDS.get(family, SCENARIO_DOCUMENT_KINDS.get(context.scenario)),
                 )
             else:
-                message = f"{message}\n\n--- forwarded message ---\n{hidden}"
+                forwarded = f"\n\n--- forwarded message ---\n{hidden}"
+                message += forwarded
+                payload += forwarded
 
         if evolved is None and self._fuzzer is not None:
             applied, message = self._mutate(self._fuzzer, context, tactic, message, rng)
 
         return Attack(
-            family=family.value, mutators=list(applied), message=message, document=document
+            family=family.value,
+            mutators=list(applied),
+            message=message,
+            document=document,
+            payload=payload if applied else None,
         )
 
     @staticmethod
