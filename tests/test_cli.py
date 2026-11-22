@@ -20,6 +20,7 @@ from wonderland_court.contracts import (
     TechniqueFamily,
     parse_event,
 )
+from wonderland_court.engine import defenses
 
 runner = CliRunner()
 WIDE = {"COLUMNS": "200", "NO_COLOR": "1"}
@@ -76,7 +77,7 @@ def test_advise_groups_a_mock_runs_failures_and_writes_the_hardened_config(
     assert result.exit_code == 0, result.output
     assert "Failure families in run run-" in result.output
     assert "Recommended defense: spotlighting+guard+output_filter" in result.output
-    assert "the spotlighting defense isn't built yet (#17)" in result.output
+    assert "isn't built yet" not in result.output
     patch = (tmp_path / "court.hardened.yaml").read_text(encoding="utf-8")
     assert yaml.safe_load(patch) == {"defenses": ["spotlighting+guard+output_filter"]}
     with sqlite3.connect(tmp_path / ".court" / "court.db") as connection:
@@ -146,10 +147,10 @@ def test_retrial_replays_the_baseline_seeds_with_the_hardened_config(
     assert invoke("advise").exit_code == 0
     [(baseline, _, _)] = runs(db)
 
-    unbuilt = invoke("retrial")
-    assert unbuilt.exit_code == 1
-    assert "court retrial: the spotlighting defense isn't built yet (#17)" in unbuilt.output
-    assert len(runs(db)) == 1  # refused before a retrial run started
+    recommended = invoke("retrial")  # guard and spotlighting use the mock defense model
+    assert recommended.exit_code == 0, recommended.output
+    assert "with spotlighting+guard+output_filter" in recommended.output
+    assert len(runs(db)) == 2
 
     (tmp_path / "court.hardened.yaml").write_text('defenses:\n  - "input_filter+output_filter"\n')
     result = invoke("retrial")
@@ -160,7 +161,7 @@ def test_retrial_replays_the_baseline_seeds_with_the_hardened_config(
     assert "-75 pts" in result.output
     assert "Utility (Dodo pass rate)" in result.output
 
-    [_, (retried, parent, status)] = runs(db)
+    [_, _, (retried, parent, status)] = runs(db)
     assert (parent, status) == (baseline, "finished")
     with sqlite3.connect(db) as connection:
         [(seeds, before, after, delta)] = connection.execute(
@@ -172,7 +173,8 @@ def test_retrial_replays_the_baseline_seeds_with_the_hardened_config(
             "SELECT seed FROM matches WHERE run_id = ?", (baseline,)
         ).fetchall()
     assert sorted(json.loads(seeds)) == sorted(seed for (seed,) in baseline_seeds)
-    assert (before, after, delta) == (0.75, 0.0, -0.75)
+    # 5 of 8 baseline matches leak now that the spotlighting stacks run in the mock trial
+    assert (before, after, delta) == (0.625, 0.0, -0.625)
 
     again = invoke("retrial")  # the latest run is a retrial, so the baseline is retried again
     assert again.exit_code == 0, again.output
@@ -380,15 +382,31 @@ def test_quick_mock_trial_runs_offline_and_records_the_run(
     db = tmp_path / "out" / "court.db"
     result = invoke("trial", "--quick", "--mock", "--db", str(db))
     assert result.exit_code == 0, result.output
-    assert "Skipping spotlighting: the spotlighting defense isn't built yet (#17)" in result.output
+    assert "Skipping" not in result.output  # every quick stack runs offline, guard included
+    assert "spotlighting+guard+output_filter vs refund_tool: held" in result.output
     assert "Off with her head!" in result.output
-    assert "3 of 4 matches leaked" in result.output
+    assert "5 of 8 matches leaked" in result.output
 
     rows, lines = recorded(db)
     assert rows == lines and len(lines) > 0
     events = [parse_event(line) for line in lines]
     assert events[0].type == "run_started" and events[-1].type == "run_ended"
     assert not (tmp_path / ".court").exists()  # --db wins over the preset's path
+
+
+def test_trial_skips_a_stack_with_a_defense_that_is_not_built(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setitem(defenses.PLANNED, "teleport", "#99")
+    (tmp_path / "court.yaml").write_text(
+        "target: ollama:llama3.1\ndefenses: [plain, teleport+guard]\nscenarios: [vault]\n",
+        encoding="utf-8",
+    )
+    result = invoke("trial", "--mock")
+    assert result.exit_code == 0, result.output
+    assert "Skipping teleport+guard: the teleport defense isn't built yet (#99)." in result.output
+    assert "1 of 1 matches leaked" in result.output
 
 
 def test_trial_without_court_yaml_points_at_mock(

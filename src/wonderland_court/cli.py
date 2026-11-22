@@ -44,7 +44,7 @@ from wonderland_court.engine.init_doctor import (
     run_doctor,
     write_court_yaml,
 )
-from wonderland_court.engine.mock import MockTarget
+from wonderland_court.engine.mock import MockDefenseModel, MockTarget
 from wonderland_court.engine.runner import TrialResult, plan_matches, run_trial
 from wonderland_court.engine.store import (
     CourtReader,
@@ -53,7 +53,12 @@ from wonderland_court.engine.store import (
     RetrialComparison,
     RunRecord,
 )
-from wonderland_court.engine.targets import build_target, canonical_spec, is_agent_target
+from wonderland_court.engine.targets import (
+    ChatClient,
+    build_target,
+    canonical_spec,
+    is_agent_target,
+)
 from wonderland_court.llm import RateLimitedLLMClient, default_client, set_default_client
 
 app = typer.Typer(
@@ -257,12 +262,14 @@ async def _trial(
         target: Target
         attacker: Attacker
         judge: Judge
+        defense_llm: ChatClient
         if mock:
             target, attacker, judge = (
                 MockTarget(),
                 registry.ScriptedAttacker(),
                 registry.CanaryJudge(),
             )
+            defense_llm = MockDefenseModel()
         else:
             client = RateLimitedLLMClient(cache=SQLiteResponseCache(store))
             set_default_client(client)  # a Python agent may borrow it, as the tea shop's does
@@ -271,6 +278,7 @@ async def _trial(
             else:
                 assert isinstance(settings.target, str)
                 target = build_target(settings.target, client)
+            defense_llm = client
             attacker = registry.load_attacker(settings, client)
             judge = registry.load_judge(settings, client)
         with Progress(console=console, transient=True) as progress:
@@ -284,6 +292,7 @@ async def _trial(
                 families=families,
                 mutators=mutators,
                 on_event=_Reporter(progress, total),
+                defense_llm=defense_llm,
             )
         await _calibrate(result.run_id, store, judge, console)
     return result, jsonl_dir / f"{result.run_id}.jsonl"
@@ -613,6 +622,7 @@ async def _retrial(
         target: Target
         attacker: Attacker
         judge: Judge
+        defense_llm: ChatClient
         if baseline.target == MockTarget.name:
             client = default_client()
             target, attacker, judge = (
@@ -620,6 +630,7 @@ async def _retrial(
                 registry.ScriptedAttacker(),
                 registry.CanaryJudge(),
             )
+            defense_llm = MockDefenseModel()
         else:
             if not isinstance(config.target, str):
                 raise ValueError("retrying an agent target needs agent targets (#19)")
@@ -628,6 +639,7 @@ async def _retrial(
             target = build_target(config.target, client)
             attacker = registry.load_attacker(config, client)
             judge = registry.load_judge(config, client)
+            defense_llm = client
         utility = registry.load_utility_evaluator(config, client)
         total = len(await store.get_matches(baseline.run_id))
         with Progress(console=console, transient=True) as progress:
@@ -640,6 +652,7 @@ async def _retrial(
                 judge=judge,
                 utility=utility,
                 on_event=_Reporter(progress, total),
+                defense_llm=defense_llm,
             )
 
 

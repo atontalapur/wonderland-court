@@ -52,7 +52,12 @@ from wonderland_court.contracts.models import (
     TechniqueFamily,
     Turn,
 )
-from wonderland_court.engine.defenses import DefensePolicy, compose_defenses, parse_defenses
+from wonderland_court.engine.defenses import (
+    DefenseModels,
+    DefensePolicy,
+    compose_defenses,
+    parse_defenses,
+)
 from wonderland_court.engine.mock import MockTarget
 from wonderland_court.engine.runner import run_matches
 from wonderland_court.engine.scenarios import build_scenario
@@ -804,6 +809,7 @@ async def _mean_utility(
     target: Target,
     defenses: Iterable[str],
     seeds: Mapping[ScenarioId, int],
+    models: DefenseModels,
 ) -> float | None:
     """The Dodo's mean pass rate for `target` behind each defense, over the run's scenarios.
     Each defense gets the scenario's tool rules, as in a match. `None` when the Dodo has no
@@ -812,7 +818,8 @@ async def _mean_utility(
     for defense in defenses:
         for scenario, seed in seeds.items():
             rules = tuple(build_scenario(scenario, seed).stakes.tool_rules)
-            defended = compose_defenses(defense, target, DefensePolicy(tool_rules=rules))
+            policy = DefensePolicy(tool_rules=rules, models=models)
+            defended = compose_defenses(defense, target, policy)
             score = await utility.evaluate(defended, scenario)
             if score is not None:
                 scores.append(score)
@@ -869,6 +876,7 @@ class CaterpillarRemediator:
         judge: Judge,
         utility: UtilityEvaluator,
         on_event: Callable[[Event], None] | None = None,
+        defense_llm: ChatClient | None = None,
     ) -> ComparisonRow:
         """Replay run `run_id`'s finished matches on the same seeds behind `defense`, as a new
         run whose parent is `run_id`. The Dodo scores the baseline's defenses and `defense` on
@@ -895,18 +903,22 @@ class CaterpillarRemediator:
             store=store,
             parent_run_id=run_id,
             on_event=on_event,
+            defense_llm=defense_llm,
         )
         _, retried = await _read_run(store, result.run_id)
 
         seeds: dict[ScenarioId, int] = {}
         for r in baseline:
             seeds.setdefault(r.match.scenario, r.match.seed)
+        models = DefenseModels(
+            guard=config.guard_model, quarantine=config.quarantine_model, llm=defense_llm
+        )
         before = _unique(r.match.defense for r in baseline)
         comparison = compare_retrial(
             baseline,
             retried,
-            baseline_utility=await _mean_utility(utility, target, before, seeds),
-            retrial_utility=await _mean_utility(utility, target, [defense], seeds),
+            baseline_utility=await _mean_utility(utility, target, before, seeds, models),
+            retrial_utility=await _mean_utility(utility, target, [defense], seeds, models),
         )
         row = comparison.to_store()
         await store.save_retrial_comparison(row)
