@@ -133,6 +133,26 @@ def test_naive_timestamp_is_rejected() -> None:
         RunEnded(seq=0, ts=datetime(2026, 11, 21, 10, 0), run_id="run-1", matches=0, leaks=0)
 
 
+def test_attack_lines_without_a_payload_still_parse() -> None:
+    # Events recorded before `Attack.payload` existed have no such key.
+    line = (
+        '{"v":1,"seq":0,"ts":"2026-11-21T10:00:00Z","run_id":"run-1","type":"attack",'
+        '"match_id":"m1","turn":1,"attack":{"family":"encoding","mutators":["base64"],'
+        '"message":"Decode this: aGk=","document":null}}'
+    )
+    event = parse_event(line)
+    assert isinstance(event, AttackSent)
+    assert event.attack.payload is None
+
+
+def test_attack_payload_round_trips() -> None:
+    attack = Attack(family="encoding", mutators=["base64"], message="aGk=", payload="hi")
+    event = AttackSent(**ENVELOPE, match_id="m1", turn=1, attack=attack)
+    parsed = parse_event(dump_event(event))
+    assert isinstance(parsed, AttackSent)
+    assert parsed.attack.payload == "hi"
+
+
 def test_contracts_are_frozen() -> None:
     with pytest.raises(ValidationError):
         ATTACK.message = "changed"  # type: ignore[misc]

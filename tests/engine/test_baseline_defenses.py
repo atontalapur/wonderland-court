@@ -14,6 +14,7 @@ from wonderland_court.contracts import (
     TargetRequest,
     ToolCall,
 )
+from wonderland_court.engine import defenses
 from wonderland_court.engine.defenses import (
     DEFENSES,
     DefensePolicy,
@@ -76,7 +77,8 @@ def send_email(to: str) -> ToolCall:
 
 def test_every_defense_satisfies_the_protocol() -> None:
     defenses: list[Defense] = [factory(POLICY) for factory in DEFENSES.values()]
-    assert [d.name for d in defenses] == ["plain", "sandwich", "input_filter", "output_filter"]
+    assert [d.name for d in defenses] == list(DEFENSES)
+    assert list(DEFENSES)[:4] == ["plain", "sandwich", "input_filter", "output_filter"]
 
 
 def test_supports_matrix() -> None:
@@ -107,10 +109,16 @@ def test_unknown_defense_raises() -> None:
         parse_defenses("plain+moat", TargetKind.MODEL)
 
 
-@pytest.mark.parametrize("name", ["spotlighting", "guard", "dual_llm"])
-def test_wave_2_defenses_say_they_are_not_built(name: str) -> None:
-    with pytest.raises(NotBuiltError, match="#17"):
-        parse_defenses(f"{name}+output_filter", TargetKind.MODEL)
+@pytest.fixture
+def planned(monkeypatch: pytest.MonkeyPatch) -> str:
+    """A defense that is named but not built yet."""
+    monkeypatch.setitem(defenses.PLANNED, "teleport", "#99")
+    return "teleport"
+
+
+def test_a_planned_defense_says_it_is_not_built(planned: str) -> None:
+    with pytest.raises(NotBuiltError, match="the teleport defense isn't built yet \\(#99\\)"):
+        parse_defenses(f"{planned}+output_filter", TargetKind.MODEL)
 
 
 def test_model_only_defense_on_an_agent_raises() -> None:
@@ -118,10 +126,12 @@ def test_model_only_defense_on_an_agent_raises() -> None:
         compose_defenses("input_filter+sandwich", Echo(kind=TargetKind.AGENT))
 
 
-@pytest.mark.parametrize("spec", ["spotlighting+moat", "moat+spotlighting"])
-def test_a_typo_is_reported_even_next_to_a_defense_that_is_not_built(spec: str) -> None:
+@pytest.mark.parametrize("spec", ["{planned}+moat", "moat+{planned}"])
+def test_a_typo_is_reported_even_next_to_a_defense_that_is_not_built(
+    spec: str, planned: str
+) -> None:
     with pytest.raises(ValueError, match="unknown defense 'moat'"):
-        parse_defenses(spec, TargetKind.MODEL)
+        parse_defenses(spec.format(planned=planned), TargetKind.MODEL)
 
 
 def test_the_sandwich_reminder_does_not_look_like_an_injection() -> None:

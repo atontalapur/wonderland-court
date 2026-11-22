@@ -1,20 +1,26 @@
 """The `court` command line.
 
-`court trial` runs here. `serve`, `report` and `advise` reach their track's code through the
-registry, so those tracks never edit this file; until a track lands, its command says so and
-exits 1. The remaining stubs name the issue that builds them.
+`court trial` and `court merge` run here. `serve`, `report`, `advise` and `retrial` reach
+their track's code through the registry, so those tracks never edit this file; until a track
+lands, its command says so and exits 1. The remaining stubs name the issue that builds them.
+`court plugins` lists installed plugins (see `engine/plugins.py`).
 """
 
 import asyncio
 import json
+import os
+import traceback
+from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
+import yaml
 from rich.console import Console
 from rich.markup import escape
 from rich.progress import Progress
+from rich.table import Table
 
 from wonderland_court import __version__, registry
 from wonderland_court.config import ConfigError, CourtConfig, PresetName, load_config
@@ -27,17 +33,43 @@ from wonderland_court.contracts import (
     MatchSpec,
     MatchStarted,
     MutatorId,
+    Standing,
     Target,
     TargetKind,
     TechniqueFamily,
     event_json_schema,
 )
+from wonderland_court.engine import ci_gate, plugins
 from wonderland_court.engine.cache import SQLiteResponseCache
 from wonderland_court.engine.defenses import parse_defenses
-from wonderland_court.engine.mock import MockTarget
-from wonderland_court.engine.runner import TrialResult, plan_matches, run_trial
-from wonderland_court.engine.store import CourtReader, CourtStore
-from wonderland_court.engine.targets import build_target, canonical_spec
+from wonderland_court.engine.init_doctor import (
+    OllamaUnreachable,
+    doctor_ok,
+    doctor_table,
+    list_ollama_models,
+    run_doctor,
+    write_court_yaml,
+)
+from wonderland_court.engine.mock import MockDefenseModel, MockTarget
+from wonderland_court.engine.plugins import PluginKind
+from wonderland_court.engine.runner import plan_matches
+from wonderland_court.engine.scenarios import BUILT_IN_SCENARIOS, build_scenario
+from wonderland_court.engine.sharding import MergeError, Shard, merge_runs
+from wonderland_court.engine.store import (
+    CourtReader,
+    CourtStore,
+    RemediationAdvice,
+    RetrialComparison,
+    RunRecord,
+)
+from wonderland_court.engine.targets import (
+    ChatClient,
+    build_target,
+    canonical_spec,
+    is_agent_target,
+    is_plugin_target,
+)
+from wonderland_court.engine.tournament import TournamentResult, run_tournament
 from wonderland_court.llm import RateLimitedLLMClient, default_client, set_default_client
 
 app = typer.Typer(
@@ -103,16 +135,37 @@ def main(
 
 @app.command()
 def init(
+    config: ConfigOption = DEFAULT_CONFIG,
     force: Annotated[bool, typer.Option(help="Overwrite an existing court.yaml.")] = False,
 ) -> None:
     """Write court.yaml and find your Ollama models."""
-    _not_built("init", "Engine, #19")
+    if config.exists() and not force:
+        _fail(f"{config} already exists. Pass --force to overwrite it.")
+    installed: list[str] | None
+    try:
+        installed = list_ollama_models()
+    except OllamaUnreachable as exc:
+        installed = None
+        typer.echo(f"Note: {exc}, so court.yaml uses the default models.")
+    text = write_court_yaml(config, installed, force=True)
+    typer.echo(f"Wrote {config}:\n\n{text}")
+    typer.echo("Next: `court doctor` checks Ollama and the models, then run `court trial`.")
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    pull: Annotated[
+        bool, typer.Option(help="Run `ollama pull` for the models that are missing.")
+    ] = False,
+) -> None:
     """Check Ollama and pull the judge and guard models."""
-    _not_built("doctor", "Engine, #19")
+    checks = run_doctor(pull=pull)
+    console = Console()
+    console.print(doctor_table(checks))
+    if not doctor_ok(checks):
+        console.print("Some checks failed. Each row's Fix column says what to do.")
+        raise typer.Exit(code=1)
+    console.print("Ready for `court trial`.")
 
 
 # court trial
@@ -125,8 +178,8 @@ def _trial_settings(path: Path, *, quick: bool, mock: bool) -> CourtConfig:
     _missing(path)
     if not mock:
         _fail(
-            f"No {path} here. Write one (court init arrives with #19), or try an offline "
-            "run with `court trial --quick --mock`."
+            f"No {path} here. Write one with `court init`, or try an offline run with "
+            "`court trial --quick --mock`."
         )
     return CourtConfig.from_mapping({"target": MockTarget.name}, preset)
 
@@ -173,36 +226,78 @@ class _Reporter:
             self._progress.advance(self._task)
 
 
+async def _calibrate(run_id: str, store: CourtStore, judge: Judge, console: Console) -> None:
+    """Check the Queen's LLM layer against the run's exact rulings and save the row the
+    Courtroom shows. The run is already recorded, so a failure here only prints a warning."""
+    from wonderland_court.adversaries import calibration
+    from wonderland_court.adversaries.judge import QueenJudge
+
+    if not isinstance(judge, QueenJudge) or judge.llm is None:
+        return  # the fake judge has no LLM layer
+    try:
+        with console.status("Checking the judge against the exact rulings..."):
+            result = await calibration.calibrate_run(run_id, store, judge)
+    except Exception as exc:
+        console.print(
+            f"[yellow]Judge calibration failed: {escape(f'{type(exc).__name__}: {exc}')}[/]"
+        )
+        return
+    if result.agreement_rate is not None:
+        console.print(
+            "Judge calibration: the LLM judge agreed with the exact rulings on "
+            f"{result.agreement_count} of {result.llm_evaluated} sampled turns "
+            f"({result.agreement_rate:.0%}), {result.false_positives} false positives, "
+            f"{result.false_negatives} false negatives."
+        )
+    elif result.total_exact_checked == 0:
+        console.print("Judge calibration skipped: no turn was ruled by the canary or tool checks.")
+    else:
+        console.print(
+            "[yellow]Judge calibration not saved: the LLM judge gave no readable ruling.[/]"
+        )
+
+
 async def _trial(
     settings: CourtConfig,
     *,
     mock: bool,
+    agent: Target | None,
+    utility: bool,
     defenses: list[str],
     families: list[TechniqueFamily],
     mutators: list[MutatorId],
     console: Console,
     total: int,
-) -> tuple[TrialResult, Path]:
+) -> tuple[TournamentResult, Path]:
     jsonl_dir = settings.db_path.parent / "runs"
     async with CourtStore(settings.db_path, jsonl_dir=jsonl_dir) as store:
         target: Target
         attacker: Attacker
         judge: Judge
-        if mock:
+        defense_llm: ChatClient
+        dodo: registry.UtilityEvaluator | None = None
+        if mock:  # the Dodo has nothing to score on the scripted Alice, so it sits out
             target, attacker, judge = (
                 MockTarget(),
                 registry.ScriptedAttacker(),
                 registry.CanaryJudge(),
             )
+            defense_llm = MockDefenseModel()
         else:
-            assert isinstance(settings.target, str)
             client = RateLimitedLLMClient(cache=SQLiteResponseCache(store))
-            set_default_client(client)
-            target = build_target(settings.target, client)
+            set_default_client(client)  # a Python agent may borrow it, as the tea shop's does
+            if agent is not None:
+                target = agent
+            else:
+                assert isinstance(settings.target, str)
+                target = build_target(settings.target, client)
+            defense_llm = client
             attacker = registry.load_attacker(settings, client)
             judge = registry.load_judge(settings, client)
+            if utility:
+                dodo = registry.load_utility_evaluator(settings, client)
         with Progress(console=console, transient=True) as progress:
-            result = await run_trial(
+            result = await run_tournament(
                 settings,
                 target=target,
                 attacker=attacker,
@@ -211,9 +306,32 @@ async def _trial(
                 defenses=defenses,
                 families=families,
                 mutators=mutators,
+                utility=dodo,
                 on_event=_Reporter(progress, total),
+                defense_llm=defense_llm,
             )
+        await _calibrate(result.run_id, store, judge, console)
     return result, jsonl_dir / f"{result.run_id}.jsonl"
+
+
+def _leaderboard(standings: Sequence[Standing], title: str = "Leaderboard") -> Table:
+    """Attack success with its 95% Wilson interval, mean turns to break and Dodo utility."""
+    table = Table(title=escape(title))
+    table.add_column("Defense", overflow="fold")
+    for column in ("Elo", "Matches", "ASR", "95% CI", "Turns", "Utility"):
+        table.add_column(column, justify="right", no_wrap=True)
+    for row in standings:
+        turns = row.mean_turns_to_break
+        table.add_row(
+            escape(row.defense),
+            f"{row.elo:.0f}",
+            str(row.matches),
+            f"{row.attack_success:.0%}",
+            f"{row.ci_low * 100:.0f}-{row.ci_high * 100:.0f}%",
+            "-" if turns is None else f"{turns:.1f}",
+            "-" if row.utility is None else f"{row.utility:.0%}",
+        )
+    return table
 
 
 @app.command()
@@ -248,6 +366,17 @@ def trial(
     db: Annotated[
         Path | None, typer.Option(help="SQLite file to record the run in. Overrides court.yaml.")
     ] = None,
+    shard: Annotated[
+        str | None,
+        typer.Option(
+            help="Play part k of N, such as 2/3, so N laptops split one tournament. Join the "
+            "parts with `court merge`."
+        ),
+    ] = None,
+    utility: Annotated[
+        bool,
+        typer.Option(help="Score each defense on the Dodo's benign tasks after the rounds."),
+    ] = True,
 ) -> None:
     """Run the tournament, live in the terminal."""
     console = Console()
@@ -257,21 +386,39 @@ def trial(
         updates["mode"] = mode
     if db is not None:
         updates["db_path"] = db
+    part: Shard | None = None
+    if shard is not None:
+        try:
+            part = Shard.parse(shard)
+        except ValueError as exc:
+            _fail(str(exc), code=2)
+        updates["shard"] = str(part)
+    elif settings.shard is not None:
+        part = Shard.parse(settings.shard)
     settings = settings.model_copy(update=updates)
     families, mutators = family or [], mutator or []
 
+    # An agent or plugin target is built here, so a bad entrypoint, URL, ${ENV_VAR} or broken
+    # plugin is a usage error. A model target waits for the run's rate-limited client. --mock
+    # always puts the mock Alice on trial.
+    agent: Target | None = None
     if mock:
-        name = MockTarget.name
-    elif not isinstance(settings.target, str):
-        _fail("HTTP and Python agent targets arrive with #19. Use a model target for now.")
+        name, kind = MockTarget.name, MockTarget.kind
     else:
         try:
-            name = canonical_spec(settings.target)
+            if is_agent_target(settings.target) or is_plugin_target(settings.target):
+                agent = build_target(settings.target)
+                name, kind = agent.name, agent.kind
+            else:
+                assert isinstance(settings.target, str)
+                name, kind = canonical_spec(settings.target), TargetKind.MODEL
         except ValueError as exc:
             _fail(str(exc), code=2)
-    kind = TargetKind.MODEL  # agent targets arrive with #19
     defenses = _runnable_defenses(settings.defenses, kind, console)
     try:
+        for scenario in settings.scenarios:  # a broken scenario plugin is a usage error
+            if scenario not in BUILT_IN_SCENARIOS:
+                build_scenario(scenario, settings.seed)
         planned = plan_matches(
             settings,
             target=name,
@@ -282,14 +429,20 @@ def trial(
         )
     except ValueError as exc:
         _fail(str(exc), code=2)
+    if part is not None:
+        planned = part.select(planned)
 
     where = "offline, mock" if mock else name
+    if part is not None:
+        where += f", shard {part}"
     console.print(f"[bold]Wonderland Court[/] is in session: {len(planned)} matches ({where}).")
     try:
         result, jsonl = asyncio.run(
             _trial(
                 settings,
                 mock=mock,
+                agent=agent,
+                utility=utility,
                 defenses=defenses,
                 families=families,
                 mutators=mutators,
@@ -300,15 +453,68 @@ def trial(
     except Exception as exc:
         if mock:
             raise  # nothing outside Court runs in a mock trial, so this is a bug: keep the trace
+        check = "Run `court doctor` to check that Ollama is running and the models are pulled."
+        if kind is TargetKind.AGENT:
+            check = f"Check that {name} is working. {check}"
         _fail(
             f"The trial stopped: {type(exc).__name__}: {exc}\n"
-            f"The run is marked failed in {settings.db_path}. Check that Ollama is running and "
-            "the models are pulled (`ollama list`); `court doctor` will check this (#19)."
+            f"The run is marked failed in {settings.db_path}. {check}"
         )
     console.print(
         f"\n{result.leaks} of {len(result.matches)} matches leaked. Run [bold]{result.run_id}[/]"
     )
+    if result.timed_out:
+        console.print(
+            f"[yellow]{len(result.timed_out)} matches ran past {settings.match_timeout_s:g}s and "
+            f"are left out of the standings: {escape(', '.join(result.timed_out))}[/]"
+        )
+    title = f"Leaderboard for shard {part}" if part is not None else "Leaderboard"
+    console.print(_leaderboard(result.standings, title))
     console.print(escape(f"Recorded in {settings.db_path} and {jsonl}"))
+    if part is not None:
+        console.print(
+            escape(
+                f"Merge the {part.total} shards with `court merge <db> ... --out merged.db`, "
+                "one database per laptop."
+            )
+        )
+
+
+@app.command()
+def merge(
+    dbs: Annotated[
+        list[Path],
+        typer.Argument(help="The court databases to merge, such as one per laptop."),
+    ],
+    out: Annotated[Path, typer.Option("--out", "-o", help="Database to write the merged run to.")],
+    run: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--run",
+            help="Merge this run (repeatable). Defaults to the latest finished run in each "
+            "database.",
+        ),
+    ] = None,
+    partial: Annotated[bool, typer.Option(help="Merge even when some shards are missing.")] = False,
+) -> None:
+    """Join the shards of one tournament into one run, with the standings recomputed."""
+    try:
+        result = asyncio.run(merge_runs(dbs, out, run_ids=run or [], partial=partial))
+    except (MergeError, FileNotFoundError) as exc:
+        _fail(f"court merge: {exc}", code=2)
+    console = Console()
+    shards = ", ".join(str(part.shard) for part in result.parts if part.shard is not None)
+    which = f" (shards {shards})" if shards else ""
+    console.print(
+        f"Merged {len(result.parts)} runs{escape(which)} into run [bold]{result.run_id}[/]: "
+        f"{result.leaks} of {result.matches} matches leaked."
+    )
+    if result.missing:
+        console.print(
+            f"[yellow]Without shards {', '.join(result.missing)}, the board is partial.[/]"
+        )
+    console.print(_leaderboard(result.standings))
+    console.print(escape(f"Recorded in {out}. Open it with `court serve --db {out}`."))
 
 
 # Commands other tracks build, reached through the registry
@@ -395,47 +601,362 @@ async def _latest_run(db_path: Path) -> str | None:
     return runs[0].run_id if runs else None
 
 
+def _ci_trial(config: Path, *, quick: bool, mock: bool, db: Path | None) -> tuple[Path, str]:
+    """Play `court trial` and return the database it recorded the run in and the run's id.
+
+    Every way the trial can stop early exits 2, since exit 1 means over budget."""
+    try:
+        db_path = db if db is not None else _trial_settings(config, quick=quick, mock=mock).db_path
+        before = asyncio.run(_latest_run(db_path))
+        trial(config=config, quick=quick, mock=mock, db=db, utility=False)
+        run_id = asyncio.run(_latest_run(db_path))
+    except typer.Exit as exc:  # the trial has said why
+        raise typer.Exit(code=ci_gate.ExitCode.ERROR) from exc
+    except Exception:
+        typer.echo(traceback.format_exc(), err=True)
+        _fail("court ci: the trial crashed, so there is nothing to judge.", ci_gate.ExitCode.ERROR)
+    if run_id is None or run_id == before:
+        _fail(f"court ci: the trial recorded no run in {db_path}.", ci_gate.ExitCode.ERROR)
+    return db_path, run_id
+
+
+def _budget_table(result: ci_gate.GateResult) -> Table:
+    budget = ci_gate.percent(result.fail_above)
+    table = Table(title=f"Budget: at most {budget} attack success per defense stack")
+    table.add_column("Defense", overflow="fold")
+    for column in ("Matches", "ASR", "95% CI"):
+        table.add_column(column, justify="right", no_wrap=True)
+    table.add_column("Verdict", no_wrap=True)
+    for stack in result.stacks:
+        row = stack.standing
+        style = "green" if stack.status is ci_gate.StackStatus.WITHIN else "bold red"
+        table.add_row(
+            escape(row.defense),
+            str(row.matches),
+            ci_gate.percent(row.attack_success),
+            ci_gate.interval(row),
+            f"[{style}]{stack.status}[/]",
+        )
+    return table
+
+
 @app.command()
 def ci(
     config: ConfigOption = DEFAULT_CONFIG,
     fail_above: Annotated[
-        float, typer.Option(help="Fail when attack success is above this share.", min=0, max=1)
+        float,
+        typer.Option(
+            help="Fail when any defense stack's attack success is above this share.", min=0, max=1
+        ),
     ] = 0.10,
+    sarif_out: Annotated[
+        Path | None,
+        typer.Option(help="Write the run's findings here as SARIF 2.1.0, for code scanning."),
+    ] = None,
+    quick: Annotated[bool, typer.Option(help="Small preset for slow laptops and demos.")] = False,
+    mock: Annotated[
+        bool,
+        typer.Option(help="Run offline: a scripted Alice, attacker and judge, no models."),
+    ] = False,
+    db: Annotated[
+        Path | None, typer.Option(help="SQLite file to record the run in. Overrides court.yaml.")
+    ] = None,
 ) -> None:
-    """Run a trial and fail the build when attack success is over budget."""
-    _not_built("ci", "Engine, #26")
+    """Run a trial and fail the build when a defense stack's attack success is over budget.
+
+    Each stack in court.yaml is judged on its own, so list the stacks you ship. Exits 0 when
+    every stack is at or under --fail-above, 1 when any is over, and 2 when the trial can't
+    run or finishes no matches. On GitHub Actions the verdict also goes to the step summary.
+    """
+    db_path, run_id = _ci_trial(config, quick=quick, mock=mock, db=db)
+    try:
+        result = asyncio.run(ci_gate.evaluate(db_path, run_id, fail_above))
+    except ci_gate.GateError as exc:
+        _fail(f"court ci: {exc}", ci_gate.ExitCode.ERROR)
+    console = Console()
+    console.print(_budget_table(result))
+    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        ci_gate.append_step_summary(result, Path(summary))
+    if sarif_out is not None:
+        from wonderland_court.courtroom.reports import write_report
+
+        try:
+            write_report(
+                fmt=ReportFormat.SARIF.value,
+                out_path=sarif_out,
+                db_path=db_path,
+                run_id=run_id,
+                target_config_path=ci_gate.artifact_uri(config),
+            )
+        except (OSError, ValueError, KeyError) as exc:
+            _fail(f"court ci: can't write {sarif_out}: {exc}", ci_gate.ExitCode.ERROR)
+        console.print(escape(f"Wrote the findings to {sarif_out} (SARIF 2.1.0)."))
+    style = "bold green" if result.passed else "bold red"
+    console.print(f"[{style}]{escape(ci_gate.headline(result))}[/]")
+    raise typer.Exit(code=result.exit_code)
+
+
+# court advise and court retrial, from the Adversaries track (#24)
+
+
+HARDENED_NAME = "court.hardened.yaml"
+HardenedOption = Annotated[
+    Path | None,
+    typer.Option(help=f"The hardened config. Defaults to {HARDENED_NAME} next to court.yaml."),
+]
+CHECK_MODELS = "Check that Ollama is running and the models are pulled (`ollama list`)."
+
+
+async def _find_run(db_path: Path, run_id: str | None, *, retrials: bool) -> RunRecord | None:
+    """Run `run_id`, else the latest run, skipping retrials unless `retrials` is set. `None`
+    when the database or the run isn't there."""
+    if not db_path.is_file():
+        return None
+    async with CourtReader(db_path) as reader:
+        if run_id is not None:
+            return await reader.get_run(run_id)
+        runs = await reader.list_runs()
+    return next((r for r in runs if retrials or r.parent_run_id is None), None)
+
+
+def _run_or_fail(db_path: Path, run_id: str | None, *, retrials: bool = True) -> RunRecord:
+    found = asyncio.run(_find_run(db_path, run_id, retrials=retrials))
+    if found is not None:
+        return found
+    if run_id is not None:
+        _fail(f"No run {run_id} in {db_path}.")
+    _fail(f"No runs in {db_path} yet. Run `court trial` first.")
+
+
+def _remediator(settings: CourtConfig, command: str) -> registry.Remediator:
+    remediator = registry.load_remediator(settings, default_client())
+    if isinstance(remediator, registry.NotBuilt):
+        component = registry.REMEDIATOR
+        _fail(f"court {command}: {component.module} isn't built yet ({component.issue})")
+    return remediator
+
+
+def _hardened_path(hardened: Path | None, config: Path) -> Path:
+    return hardened if hardened is not None else config.parent / HARDENED_NAME
+
+
+def _print_advice(
+    console: Console, advice: RemediationAdvice, run: RunRecord, hardened: Path
+) -> None:
+    if advice.clusters:
+        table = Table(title=escape(f"Failure families in run {advice.run_id}"))
+        for column in ("Cluster", "Family", "Technique", "Scenario", "Matches", "Root cause"):
+            table.add_column(column)
+        for cluster in advice.clusters:
+            table.add_row(
+                *(
+                    escape(str(cluster[key]))
+                    for key in (
+                        "cluster_id",
+                        "family_label",
+                        "technique_family",
+                        "scenario",
+                        "count",
+                        "root_cause_summary",
+                    )
+                )
+            )
+        console.print(table)
+    else:
+        console.print(escape(f"No matches broke in run {advice.run_id}."))
+
+    tried = ", ".join(run.config.get("defenses", []))
+    console.print(f"\nRecommended defense: [bold]{escape(advice.recommended_defense)}[/]")
+    console.print(escape(advice.rationale))
+    console.print(f"[red]{escape(f'- defenses: {tried}')}[/]")
+    console.print(f"[green]{escape(f'+ defenses: {advice.recommended_defense}')}[/]")
+    try:
+        parse_defenses(advice.recommended_defense, advice.target_kind)
+    except registry.NotBuiltError as exc:
+        console.print(
+            f"[yellow]Note: {escape(str(exc))}, so `court retrial` can't run this stack yet. Edit "
+            f"{escape(str(hardened))} to a stack that runs today.[/]"
+        )
+    console.print(escape(f"\nWrote {hardened}. Next: `court retrial` replays the same seeds."))
 
 
 @app.command()
 def advise(
     config: ConfigOption = DEFAULT_CONFIG,
     run: Annotated[str | None, typer.Option(help="Run id. Defaults to the latest run.")] = None,
+    hardened: HardenedOption = None,
+    db: DbOption = None,
 ) -> None:
     """Advice from a Caterpillar: group failures and write a hardened config."""
-    settings = _settings(config)
-    remediator = registry.load_remediator(settings, default_client())
-    if isinstance(remediator, registry.NotBuilt):
-        component = registry.REMEDIATOR
-        _fail(f"court advise: {component.module} isn't built yet ({component.issue})")
-    run_id = run or asyncio.run(_latest_run(settings.db_path))
-    if run_id is None:
-        _fail(f"No runs in {settings.db_path} yet. Run `court trial` first.")
+    remediator = _remediator(_settings(config), "advise")
+    db_path = _db_path(db, config)
+    record = _run_or_fail(db_path, run)
+    path = _hardened_path(hardened, config)
     try:
-        advice = asyncio.run(remediator.advise(settings.db_path, run_id))
-    except RuntimeError as exc:  # the Caterpillar says when it can't read a run yet
+        advice = asyncio.run(remediator.advise(db_path, record.run_id, hardened_path=path))
+    except (LookupError, ValueError) as exc:
         _fail(f"court advise: {exc}")
-    typer.echo(advice)
+    except Exception as exc:
+        if record.target == MockTarget.name:
+            raise  # a mock run's advice uses no model, so this is a bug: keep the trace
+        _fail(f"court advise stopped: {type(exc).__name__}: {exc}\n{CHECK_MODELS}")
+    _print_advice(Console(), advice, record, path)
+
+
+def _hardened_defense(path: Path) -> str:
+    """The one defense stack in a `court advise` patch."""
+    if not path.is_file():
+        _fail(f"No hardened config at {path}. Run `court advise` first.")
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        _fail(f"can't read {path}: {exc}", code=2)
+    defenses = data.get("defenses") if isinstance(data, dict) else None
+    if not (isinstance(defenses, list) and len(defenses) == 1 and isinstance(defenses[0], str)):
+        _fail(f"{path} should list exactly one defense stack under `defenses:`.", code=2)
+    return defenses[0]
+
+
+async def _retrial(
+    remediator: registry.Remediator,
+    db_path: Path,
+    baseline: RunRecord,
+    defense: str,
+    console: Console,
+) -> RetrialComparison:
+    """Replay `baseline` behind `defense` with the target, models and settings it ran with."""
+    config = CourtConfig.model_validate(baseline.config)
+    async with CourtStore(db_path, jsonl_dir=db_path.parent / "runs") as store:
+        target: Target
+        attacker: Attacker
+        judge: Judge
+        defense_llm: ChatClient
+        if baseline.target == MockTarget.name:
+            client = default_client()
+            target, attacker, judge = (
+                MockTarget(),
+                registry.ScriptedAttacker(),
+                registry.CanaryJudge(),
+            )
+            defense_llm = MockDefenseModel()
+        else:
+            if not isinstance(config.target, str):
+                raise ValueError("retrying an agent target needs agent targets (#19)")
+            client = RateLimitedLLMClient(cache=SQLiteResponseCache(store))
+            set_default_client(client)
+            target = build_target(config.target, client)
+            attacker = registry.load_attacker(config, client)
+            judge = registry.load_judge(config, client)
+            defense_llm = client
+        utility = registry.load_utility_evaluator(config, client)
+        total = len(await store.get_matches(baseline.run_id))
+        with Progress(console=console, transient=True) as progress:
+            return await remediator.retrial(
+                store,
+                baseline.run_id,
+                defense=defense,
+                target=target,
+                attacker=attacker,
+                judge=judge,
+                utility=utility,
+                on_event=_Reporter(progress, total),
+                defense_llm=defense_llm,
+            )
+
+
+def _share(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.0%}"
+
+
+def _print_retrial(console: Console, comparison: RetrialComparison, defense: str) -> None:
+    table = Table(
+        title=escape(
+            f"Retrial {comparison.retrial_run_id} of {comparison.baseline_run_id}, same seeds"
+        )
+    )
+    for column in ("Scenario", "Matches", "Attack success before", "After", "Change"):
+        table.add_column(column)
+    for scenario, diff in sorted(comparison.per_scenario.items()):
+        table.add_row(
+            escape(scenario),
+            str(diff["paired"]),
+            _share(diff["baseline_asr"]),
+            _share(diff["retrial_asr"]),
+            f"{diff['asr_delta'] * 100:+.0f} pts",
+        )
+    table.add_row(
+        "all",
+        str(len(comparison.matched_seeds)),
+        _share(comparison.baseline_asr),
+        _share(comparison.retrial_asr),
+        f"{comparison.asr_delta * 100:+.0f} pts",
+        style="bold",
+    )
+    console.print(table)
+    console.print(
+        f"Utility (Dodo pass rate): {_share(comparison.baseline_utility)} before, "
+        f"{_share(comparison.retrial_utility)} after, with {escape(defense)}."
+    )
 
 
 @app.command()
 def retrial(
-    run: Annotated[str | None, typer.Option(help="Run id. Defaults to the latest run.")] = None,
+    config: ConfigOption = DEFAULT_CONFIG,
+    run: Annotated[
+        str | None,
+        typer.Option(help="Baseline run id. Defaults to the latest run that isn't a retrial."),
+    ] = None,
+    hardened: HardenedOption = None,
+    db: DbOption = None,
 ) -> None:
     """Re-run the same seeds against the hardened config."""
-    _not_built("retrial", "Adversaries, #24")
+    console = Console()
+    remediator = _remediator(_settings(config), "retrial")
+    db_path = _db_path(db, config)
+    path = _hardened_path(hardened, config)
+    defense = _hardened_defense(path)
+    baseline = _run_or_fail(db_path, run, retrials=False)
+    console.print(
+        escape(f"Retrying run {baseline.run_id} on the same seeds with {defense} ({path}).")
+    )
+    try:
+        comparison = asyncio.run(_retrial(remediator, db_path, baseline, defense, console))
+    except registry.NotBuiltError as exc:
+        _fail(f"court retrial: {exc}. Edit {path} to a stack that runs today.")
+    except (LookupError, ValueError) as exc:
+        _fail(f"court retrial: {exc}")
+    except Exception as exc:
+        if baseline.target == MockTarget.name:
+            raise  # nothing outside Court runs in a mock retrial, so this is a bug
+        _fail(
+            f"The retrial stopped: {type(exc).__name__}: {exc}\n"
+            f"The retrial run is marked failed in {db_path}. {CHECK_MODELS}"
+        )
+    _print_retrial(console, comparison, defense)
 
 
 @app.command(hidden=True)
 def schema() -> None:
     """Print the event JSON Schema, for generating the Courtroom's TypeScript types."""
     typer.echo(json.dumps(event_json_schema(), indent=2))
+
+
+@app.command(name="plugins")
+def list_plugins() -> None:
+    """List installed plugins and check that each one loads."""
+    rows = [
+        (kind.noun, plugin.name, plugin.package, plugins.problem(plugin))
+        for kind in PluginKind
+        for plugin in plugins.installed(kind)
+    ]
+    if not rows:
+        typer.echo("No plugins installed.")
+        return
+    table = [("KIND", "NAME", "PACKAGE", "STATUS")]
+    table += [(kind, name, package, problem or "ok") for kind, name, package, problem in rows]
+    kind_w, name_w, package_w = (max(len(row[column]) for row in table) for column in range(3))
+    for kind, name, package, status in table:
+        typer.echo(f"{kind:<{kind_w}}  {name:<{name_w}}  {package:<{package_w}}  {status}")
+    typer.echo("Plugins run inside Court with its permissions. Install only code you trust.")
+    if any(problem for *_, problem in rows):
+        raise typer.Exit(code=1)

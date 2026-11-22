@@ -17,15 +17,39 @@ from wonderland_court.contracts.models import Contract
 
 PresetName = Literal["first_blood", "quick", "full"]
 DEFENSE_PART = re.compile(r"[A-Za-z0-9_.-]+")
+SHARD_SPEC = re.compile(r"\s*(\d+)\s*/\s*(\d+)\s*")
+
+
+def parse_shard(spec: str) -> tuple[int, int]:
+    """`"2/3"` as `(2, 3)`: the part, from 1, and how many parts there are."""
+    found = SHARD_SPEC.fullmatch(spec)
+    part, total = (int(found[1]), int(found[2])) if found else (0, 0)
+    if not 1 <= part <= total:
+        raise ValueError(f"shard {spec!r} should be k/N with 1 <= k <= N, such as 2/3")
+    return part, total
+
+
+DEFAULT_REQUEST_TEMPLATE: dict[str, Any] = {
+    "message": "{{message}}",
+    "canary": "{{canary}}",
+    "document": "{{document}}",
+    "history": "{{history}}",
+}
 
 
 class HttpTargetConfig(Contract):
-    """A black-box agent behind HTTP. #19 defines the template placeholders and the hooks."""
+    """A black-box agent behind HTTP. `engine/agent_targets.py` documents the placeholders.
+
+    Court POSTs `request_template` as JSON, then reads the reply text at `response_path` and
+    any tool calls at `tool_calls_path`, both dotted paths such as `choices.0.message.content`.
+    `${ENV_VAR}` in `url` and `headers` is filled in from the environment.
+    """
 
     kind: Literal["http"]
     url: str
-    request_template: dict[str, Any]
+    request_template: dict[str, Any] = DEFAULT_REQUEST_TEMPLATE
     response_path: str = "reply"
+    tool_calls_path: str | None = "tool_calls"
     headers: dict[str, str] = {}
 
 
@@ -39,9 +63,11 @@ class PythonTargetConfig(Contract):
 TargetConfig = str | Annotated[HttpTargetConfig | PythonTargetConfig, Field(discriminator="kind")]
 
 PRESETS: dict[str, dict[str, Any]] = {
+    # Checkpoint 1: one match that should end in a leak. Plain llama3.1 holds the vault
+    # against the real Cat for 4 turns but issues the $400 refund on turn 1.
     "first_blood": {
         "defenses": ["plain"],
-        "scenarios": [ScenarioId.VAULT],
+        "scenarios": [ScenarioId.REFUND_TOOL],
         "mode": MatchMode.ADAPTIVE,
         "rounds": 1,
         "max_turns": 4,
@@ -91,8 +117,17 @@ class CourtConfig(Contract):
     attacker_model: str = "qwen3.5:4b"
     judge_model: str = "llama3.1"
     guard_model: str = "llama-guard3:1b"
+    """The `guard` defense's classifier: a Llama Guard 3 or Granite Guardian model."""
+    quarantine_model: str | None = None
+    """The model `dual_llm` reads untrusted text with. Unset means the target's own model."""
     embed_model: str = "nomic-embed-text"
     db_path: Path = Path(".court/court.db")
+    match_timeout_s: float | None = Field(default=900.0, gt=0)
+    """How long one match, or one Dodo check, may run. A match that runs over ends early and is
+    left out of the standings. None means no limit."""
+    shard: str | None = None
+    """`k/N` plays only every N-th match of the schedule, from the k-th, so N laptops can split
+    one tournament. `court merge` joins the parts into one run."""
 
     @field_validator("defenses")
     @classmethod
@@ -103,6 +138,14 @@ class CourtConfig(Contract):
         if len(set(defenses)) != len(defenses):
             raise ValueError("each defense can only be listed once")
         return defenses
+
+    @field_validator("shard")
+    @classmethod
+    def _check_shard(cls, shard: str | None) -> str | None:
+        if shard is None:
+            return None
+        part, total = parse_shard(shard)
+        return f"{part}/{total}"
 
     @field_validator("scenarios")
     @classmethod

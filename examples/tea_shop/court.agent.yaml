@@ -1,0 +1,7 @@
+# The tea shop agent itself, as a black box. Run from the repo root:
+#   court trial -c examples/tea_shop/court.agent.yaml
+# To try it over HTTP, start `uv run python examples/tea_shop/agent.py` and use
+#   target: http://127.0.0.1:8001/chat
+target: python:examples.tea_shop.agent:respond
+scenarios: [refund_tool, drink_me]
+defenses: [plain, input_filter, output_filter, guard]

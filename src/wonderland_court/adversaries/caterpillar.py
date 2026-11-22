@@ -14,19 +14,15 @@ Three pure steps over a finished run's `MatchRecord`s (see `run_view`):
    `compare_retrial` pairs baseline and retrial matches on `(scenario, seed)` and reports the
    attack success rate before and after, next to the Dodo utility scores.
 
-Not built here, because the pieces they need don't exist yet:
+`CaterpillarRemediator` runs them on a recorded run for `court advise` and `court retrial`: it
+reads the run's events from the Engine's `CourtStore`, saves the `remediation_advice` and
+`retrial_comparisons` rows (`to_store` maps ours onto the store's dataclasses), and plays the
+retrial specs with the Engine's match runner under a new run whose `parent_run_id` is the
+baseline. The Dodo scores both configs for `baseline_utility` / `retrial_utility`.
 
-- Reading the run (latest run when `run is None`) from the Engine's `CourtStore` (#7) and
-  saving the `remediation_advice` and `retrial_comparisons` rows. `RemediationAdvice.to_row`
-  and `RetrialComparison.to_row` return dicts keyed like those #4 tables.
-- `cli_advise` / `cli_retrial` for `registry.py` (#4), the Rich output, and the `court advise`
-  and `court retrial` wiring in `cli.py`.
-- Loading the baseline's `runs.config_json` and the full `court.yaml` (#4), and executing the
-  retrial specs with `TournamentRunner` (#18) under a new run id whose `parent_run_id` is the
-  baseline, plus the Dodo run that supplies `baseline_utility` / `retrial_utility`.
-
-Until #4's loader exists, `config_patch_yaml` is a hand-written snippet holding only the
-`defenses:` key; merge it into `court.yaml` by hand.
+`config_patch_yaml` is a snippet holding only the `defenses:` key; merge it into `court.yaml`
+by hand. A mock run (`court trial --mock`) gets template labels and no embedding merge, so its
+advice stays offline too.
 
 Client errors from the LLM or embedder propagate, as in `QueenJudge`. Only unparseable LLM
 output falls back to the template.
@@ -38,11 +34,14 @@ import asyncio
 import json
 import uuid
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from wonderland_court.config import CourtConfig
+from wonderland_court.contracts.events import Event
+from wonderland_court.contracts.interfaces import Attacker, Judge, Target
 from wonderland_court.contracts.models import (
     JudgeLayer,
     MatchSpec,
@@ -53,11 +52,24 @@ from wonderland_court.contracts.models import (
     TechniqueFamily,
     Turn,
 )
+from wonderland_court.engine.defenses import (
+    DefenseModels,
+    DefensePolicy,
+    compose_defenses,
+    parse_defenses,
+)
+from wonderland_court.engine.mock import MockTarget
+from wonderland_court.engine.runner import run_matches
+from wonderland_court.engine.scenarios import build_scenario
+from wonderland_court.engine.store import CourtReader, CourtStore, RunRecord
+from wonderland_court.engine.store import RemediationAdvice as AdviceRow
+from wonderland_court.engine.store import RetrialComparison as ComparisonRow
+from wonderland_court.registry import UtilityEvaluator
 
 from .judge import cosine
 from .llm_json import json_objects
 from .ports import ChatClient, EmbeddingClient, ModelClient, ModelConfig
-from .run_view import MatchRecord
+from .run_view import MatchRecord, matches_from_events
 
 MERGE_COSINE = 0.78
 """Buckets in the same scenario whose breaking attacks reach this cosine merge."""
@@ -167,6 +179,19 @@ class FailureCluster:
             "with_document": self.with_document,
             "example_attack": self.example_attack,
             "reasons": list(self.reasons),
+        }
+
+    def to_store(self) -> dict[str, Any]:
+        """One entry of the store's `RemediationAdvice.clusters`, in the shape the Courtroom
+        reads (`courtroom.models.FailureClusterView`, which rejects extra keys)."""
+        return {
+            "cluster_id": self.cluster_id,
+            "family_label": self.label,
+            "technique_family": " / ".join(self.families),
+            "scenario": self.scenario.value,
+            "count": self.count,
+            "example_match_ids": list(self.match_ids),
+            "root_cause_summary": self.summary,
         }
 
 
@@ -390,16 +415,16 @@ class RemediationAdvice:
     config_patch_yaml: str
     rationale: str
 
-    def to_row(self) -> dict[str, Any]:
-        """A `remediation_advice` row (#4 schema)."""
-        return {
-            "run_id": self.run_id,
-            "target_kind": self.target_kind.value,
-            "clusters_json": json.dumps([c.to_dict() for c in self.clusters]),
-            "recommended_defense": self.recommended_defense,
-            "config_patch_yaml": self.config_patch_yaml,
-            "rationale": self.rationale,
-        }
+    def to_store(self) -> AdviceRow:
+        """The store's `remediation_advice` row."""
+        return AdviceRow(
+            run_id=self.run_id,
+            target_kind=self.target_kind,
+            clusters=[c.to_store() for c in self.clusters],
+            recommended_defense=self.recommended_defense,
+            config_patch_yaml=self.config_patch_yaml,
+            rationale=self.rationale,
+        )
 
 
 @dataclass(frozen=True)
@@ -558,7 +583,7 @@ def render_config_patch(run_id: str, target_kind: TargetKind, defense: str) -> s
     return (
         f"# Hardened by `court advise` from run {_yaml_comment(run_id)}"
         f" (target kind: {target_kind.value}).\n"
-        "# Merge into court.yaml, then run `court retrial` on the same seeds.\n"
+        "# `court retrial` replays the run's seeds with it. Merge it into court.yaml to keep it.\n"
         "defenses:\n"
         f"  - {json.dumps(defense)}\n"
     )
@@ -690,21 +715,20 @@ class RetrialComparison:
     def asr_delta(self) -> float:
         return self.retrial_asr - self.baseline_asr
 
-    def to_row(self) -> dict[str, Any]:
-        """A `retrial_comparisons` row (#4 schema)."""
-        return {
-            "retrial_run_id": self.retrial_run_id,
-            "baseline_run_id": self.baseline_run_id,
-            "matched_seeds_json": json.dumps([p.to_dict() for p in self.pairs]),
-            "baseline_asr": self.baseline_asr,
-            "retrial_asr": self.retrial_asr,
-            "asr_delta": self.asr_delta,
-            "baseline_utility": self.baseline_utility,
-            "retrial_utility": self.retrial_utility,
-            "per_scenario_json": json.dumps(
-                {d.scenario.value: d.to_dict() for d in self.per_scenario}
-            ),
-        }
+    def to_store(self) -> ComparisonRow:
+        """The store's `retrial_comparisons` row. The store keeps the seeds as plain ints, one
+        per pair, so the match ids in `pairs` stay here; `(scenario, seed)` finds them again."""
+        return ComparisonRow(
+            retrial_run_id=self.retrial_run_id,
+            baseline_run_id=self.baseline_run_id,
+            matched_seeds=self.matched_seeds,
+            baseline_asr=self.baseline_asr,
+            retrial_asr=self.retrial_asr,
+            asr_delta=self.asr_delta,
+            baseline_utility=self.baseline_utility,
+            retrial_utility=self.retrial_utility,
+            per_scenario={d.scenario.value: d.to_dict() for d in self.per_scenario},
+        )
 
 
 def compare_retrial(
@@ -772,22 +796,133 @@ def compare_retrial(
     )
 
 
+async def _read_run(store: CourtReader, run_id: str) -> tuple[RunRecord, list[MatchRecord]]:
+    """The run's record and its matches, rebuilt from its event stream."""
+    run = await store.get_run(run_id)
+    if run is None:
+        raise LookupError(f"no run {run_id} in {store.db_path}")
+    return run, matches_from_events(await store.get_events_after(run_id))
+
+
+async def _mean_utility(
+    utility: UtilityEvaluator,
+    target: Target,
+    defenses: Iterable[str],
+    seeds: Mapping[ScenarioId, int],
+    models: DefenseModels,
+) -> float | None:
+    """The Dodo's mean pass rate for `target` behind each defense, over the run's scenarios.
+    Each defense gets the scenario's tool rules, as in a match. `None` when the Dodo has no
+    tasks for any of them."""
+    scores: list[float] = []
+    for defense in defenses:
+        for scenario, seed in seeds.items():
+            rules = tuple(build_scenario(scenario, seed).stakes.tool_rules)
+            policy = DefensePolicy(tool_rules=rules, models=models)
+            defended = compose_defenses(defense, target, policy)
+            score = await utility.evaluate(defended, scenario)
+            if score is not None:
+                scores.append(score)
+    return sum(scores) / len(scores) if scores else None
+
+
 class CaterpillarRemediator:
-    """The Engine registry's `Remediator` shape. `court advise` reads a finished run from the
-    SQLite store, which is the Engine's `CourtStore` (#7) and isn't built yet, so `advise`
-    says so instead of guessing at the schema. Until then, run the core on an event stream:
-    `advise(load_matches(path), await cluster_failures(...), target_kind=...)`."""
+    """The Engine registry's `Remediator`: `court advise` and `court retrial` on a recorded
+    run in the SQLite store."""
 
     def __init__(self, client: ModelClient, *, judge_model: str, embed_model: str) -> None:
         self.client = client
         self.judge_model = judge_model
         self.embed_model = embed_model
 
-    async def advise(self, db_path: Path, run_id: str) -> str:
-        raise RuntimeError(
-            f"court advise can't read run {run_id} from {db_path} yet: it needs the Engine's "
-            "CourtStore (#7). The Caterpillar core works on event streams in the meantime."
+    async def advise(
+        self, db_path: Path, run_id: str, *, hardened_path: Path | None = None
+    ) -> AdviceRow:
+        """Cluster run `run_id`'s failures, save the `remediation_advice` row and return it.
+        With `hardened_path`, also write the config patch there.
+
+        Raises `FileNotFoundError` without a database, `LookupError` for an unknown run and
+        `ValueError` for a run without matches.
+        """
+        if not db_path.is_file():
+            raise FileNotFoundError(f"no court database at {db_path}")
+        async with CourtStore(db_path) as store:
+            run, records = await _read_run(store, run_id)
+            if not records:
+                raise ValueError(f"run {run_id} has no matches to advise on")
+            models = run.target != MockTarget.name
+            clusters = await cluster_failures(
+                records,
+                embedder=self.client if models else None,
+                llm=self.client if models else None,
+                model=self.judge_model,
+                embed_model=self.embed_model,
+            )
+            advice = advise(records, clusters, target_kind=run.target_kind)
+            row = advice.to_store()
+            await store.save_remediation_advice(row)
+        if hardened_path is not None:
+            write_hardened_config(advice, hardened_path)
+        return row
+
+    async def retrial(
+        self,
+        store: CourtStore,
+        run_id: str,
+        *,
+        defense: str,
+        target: Target,
+        attacker: Attacker,
+        judge: Judge,
+        utility: UtilityEvaluator,
+        on_event: Callable[[Event], None] | None = None,
+        defense_llm: ChatClient | None = None,
+    ) -> ComparisonRow:
+        """Replay run `run_id`'s finished matches on the same seeds behind `defense`, as a new
+        run whose parent is `run_id`. The Dodo scores the baseline's defenses and `defense` on
+        the run's scenarios. Saves the `retrial_comparisons` row and returns it.
+
+        Raises `LookupError` for an unknown run, `ValueError` for a run without finished
+        matches or a defense the target can't take, and `NotBuiltError` for a defense that
+        isn't built yet, all before the retrial run starts.
+        """
+        run, records = await _read_run(store, run_id)
+        baseline = [r for r in records if r.ended is not None]
+        if not baseline:
+            raise ValueError(f"run {run_id} has no finished matches to retry")
+        parse_defenses(defense, run.target_kind)
+        specs = retrial_specs(baseline, defense=defense)
+        config = CourtConfig.model_validate({**run.config, "defenses": [defense]})
+
+        result = await run_matches(
+            config,
+            specs,
+            target=target,
+            attacker=attacker,
+            judge=judge,
+            store=store,
+            parent_run_id=run_id,
+            on_event=on_event,
+            defense_llm=defense_llm,
         )
+        _, retried = await _read_run(store, result.run_id)
+
+        seeds: dict[ScenarioId, int] = {}
+        for r in baseline:
+            seeds.setdefault(r.match.scenario, r.match.seed)
+        models = DefenseModels(
+            guard=config.guard_model, quarantine=config.quarantine_model, llm=defense_llm
+        )
+        before = _unique(r.match.defense for r in baseline)
+        comparison = compare_retrial(
+            baseline,
+            retried,
+            baseline_utility=await _mean_utility(utility, target, before, seeds, models),
+            retrial_utility=await _mean_utility(utility, target, [defense], seeds, models),
+        )
+        row = comparison.to_store()
+        await store.save_retrial_comparison(row)
+        return row
 
 
 def build_remediator(*, config: ModelConfig, client: ModelClient) -> CaterpillarRemediator:

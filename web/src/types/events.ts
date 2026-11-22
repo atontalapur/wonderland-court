@@ -96,6 +96,8 @@ export interface Attack {
   mutators: string[];
   message: string;
   document: Document | null;
+  /** The Cat's text before mutation. Missing in events recorded before it existed. */
+  payload?: string | null;
 }
 
 export interface Verdict {

@@ -45,9 +45,10 @@ from wonderland_court.contracts import (
 )
 from wonderland_court.contracts.events import EventBase
 
-from .defenses import DefensePolicy, compose_defenses
+from .defenses import DefenseModels, DefensePolicy, compose_defenses
 from .scenarios import build_scenario
 from .store import CourtStore, RunRecord
+from .targets import ChatClient
 
 log = logging.getLogger(__name__)
 E = TypeVar("E", bound=EventBase)
@@ -108,16 +109,23 @@ class MatchResult:
 
 
 async def run_match(
-    spec: MatchSpec, target: Target, attacker: Attacker, judge: Judge, log: EventLog
+    spec: MatchSpec,
+    target: Target,
+    attacker: Attacker,
+    judge: Judge,
+    log: EventLog,
+    *,
+    models: DefenseModels | None = None,
 ) -> MatchResult:
     """Play one match and emit `match_started`, `(attack, reply, verdict)` per turn, then
-    `match_ended`. The defense stack comes from `spec.defense`.
+    `match_ended`. The defense stack comes from `spec.defense`, and `models` are what its
+    model-backed layers call (the defaults when None).
 
     The attacker sees the objective and the conversation, never the canary.
     """
     scenario = build_scenario(spec.scenario, spec.seed)
     stakes = scenario.stakes
-    policy = DefensePolicy(tool_rules=tuple(stakes.tool_rules))
+    policy = DefensePolicy(tool_rules=tuple(stakes.tool_rules), models=models or DefenseModels())
     defended = compose_defenses(spec.defense, target, policy)
     await log.emit(MatchStarted, match=spec, stakes=stakes)
 
@@ -245,23 +253,61 @@ async def run_trial(
     concurrency: int = 2,
     on_event: Callable[[Event], None] | None = None,
     clock: Callable[[], datetime] = _now,
+    defense_llm: ChatClient | None = None,
 ) -> TrialResult:
     """Run every planned match, `concurrency` at a time, and record the run in the store.
 
-    `defenses` defaults to the config's. The LLM client enforces the real rate limits; the
-    concurrency bound only keeps the event stream readable. The run's status ends as
-    `finished`, or `failed` if anything raised; the first match error is re-raised as is.
+    `defenses` defaults to the config's. Model-backed defenses call the config's
+    `guard_model` and `quarantine_model` through `defense_llm`, or through the shared default
+    client when it is None. The LLM client enforces the real rate limits; the concurrency
+    bound only keeps the event stream readable. The run's status ends as `finished`, or
+    `failed` if anything raised; the first match error is re-raised as is.
     """
-    defenses = list(config.defenses if defenses is None else defenses)
     specs = plan_matches(
         config,
         target=target.name,
         target_kind=target.kind,
         attacker=attacker.name,
-        defenses=defenses,
+        defenses=list(config.defenses if defenses is None else defenses),
         families=families,
         mutators=mutators,
     )
+    return await run_matches(
+        config,
+        specs,
+        target=target,
+        attacker=attacker,
+        judge=judge,
+        store=store,
+        run_id=run_id,
+        concurrency=concurrency,
+        on_event=on_event,
+        clock=clock,
+        defense_llm=defense_llm,
+    )
+
+
+async def run_matches(
+    config: CourtConfig,
+    specs: Sequence[MatchSpec],
+    *,
+    target: Target,
+    attacker: Attacker,
+    judge: Judge,
+    store: CourtStore,
+    run_id: str | None = None,
+    parent_run_id: str | None = None,
+    concurrency: int = 2,
+    on_event: Callable[[Event], None] | None = None,
+    clock: Callable[[], datetime] = _now,
+    defense_llm: ChatClient | None = None,
+) -> TrialResult:
+    """Play `specs` as one run, the way `run_trial` plays its plan.
+
+    `court retrial` passes the baseline's specs with a hardened defense and `parent_run_id`
+    set to the baseline run. `config` is recorded as the run's config.
+    """
+    defenses = list(dict.fromkeys(spec.defense for spec in specs))
     run_id = run_id or new_run_id()
 
     log = EventLog(run_id, store.append_event, clock, listener=on_event)
@@ -272,13 +318,17 @@ async def run_trial(
             target=target.name,
             target_kind=target.kind,
             config=config.model_dump(mode="json"),
+            parent_run_id=parent_run_id,
         )
     )
     gate = asyncio.Semaphore(concurrency)
+    models = DefenseModels(
+        guard=config.guard_model, quarantine=config.quarantine_model, llm=defense_llm
+    )
 
     async def play(spec: MatchSpec) -> MatchResult:
         async with gate:
-            result = await run_match(spec, target, attacker, judge, log)
+            result = await run_match(spec, target, attacker, judge, log, models=models)
             await store.save_match_result(spec, result.ended)
             return result
 

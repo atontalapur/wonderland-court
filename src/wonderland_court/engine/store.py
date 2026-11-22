@@ -77,6 +77,27 @@ class MatchRecord:
     broken_on_turn: int | None
     breaking_family: str | None
 
+    @classmethod
+    def from_result(cls, spec: MatchSpec, result: MatchEnded) -> Self:
+        if spec.match_id != result.match_id:
+            raise ValueError(f"spec is {spec.match_id!r} but result is {result.match_id!r}")
+        return cls(
+            match_id=spec.match_id,
+            run_id=result.run_id,
+            round=spec.round,
+            target=spec.target,
+            target_kind=spec.target_kind,
+            defense=spec.defense,
+            scenario=spec.scenario,
+            mode=spec.mode,
+            family=spec.family,
+            seed=spec.seed,
+            broken=result.broken,
+            turns=result.turns,
+            broken_on_turn=result.broken_on_turn,
+            breaking_family=result.breaking_family,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class UtilityResult:
@@ -86,7 +107,8 @@ class UtilityResult:
     defense: str
     scenario: ScenarioId
     pass_rate: float
-    false_refusal_rate: float
+    false_refusal_rate: float | None
+    """None when the evaluator only reports a pass rate, as the registry's does."""
     details: dict[str, Any] = field(default_factory=dict)
 
 
@@ -383,25 +405,15 @@ class CourtStore(CourtReader):
         await self._write(job)
 
     async def save_match_result(self, spec: MatchSpec, result: MatchEnded) -> None:
-        if spec.match_id != result.match_id:
-            raise ValueError(f"spec is {spec.match_id!r} but result is {result.match_id!r}")
+        record = MatchRecord.from_result(spec, result)
         await self._insert(
             "matches",
             {
-                "match_id": spec.match_id,
-                "run_id": result.run_id,
-                "round": spec.round,
-                "target": spec.target,
-                "target_kind": spec.target_kind.value,
-                "defense": spec.defense,
-                "scenario": spec.scenario.value,
-                "mode": spec.mode.value,
-                "family": spec.family,
-                "seed": spec.seed,
-                "broken": int(result.broken),
-                "turns": result.turns,
-                "broken_on_turn": result.broken_on_turn,
-                "breaking_family": result.breaking_family,
+                **asdict(record),
+                "target_kind": record.target_kind.value,
+                "scenario": record.scenario.value,
+                "mode": record.mode.value,
+                "broken": int(record.broken),
             },
         )
 

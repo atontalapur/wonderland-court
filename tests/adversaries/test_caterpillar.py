@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,8 +16,10 @@ from wonderland_court.adversaries.caterpillar import (
     STACK_FALLBACK,
     STACK_GUARD,
     STACK_SPOTLIGHT,
+    CaterpillarRemediator,
     FailureCluster,
     advise,
+    build_remediator,
     cluster_failures,
     compare_retrial,
     parse_label,
@@ -26,9 +27,17 @@ from wonderland_court.adversaries.caterpillar import (
     stack_parts,
     write_hardened_config,
 )
+from wonderland_court.adversaries.dodo import DodoUtility
 from wonderland_court.adversaries.judge import cosine
 from wonderland_court.adversaries.run_view import MatchRecord, load_matches
-from wonderland_court.contracts.events import MatchEnded
+from wonderland_court.config import CourtConfig
+from wonderland_court.contracts.events import (
+    Event,
+    MatchEnded,
+    MatchStarted,
+    RunStarted,
+    read_events,
+)
 from wonderland_court.contracts.models import (
     Attack,
     JudgeLayer,
@@ -41,32 +50,31 @@ from wonderland_court.contracts.models import (
     Turn,
     Verdict,
 )
+from wonderland_court.courtroom.db_reader import CourtReadDB
+from wonderland_court.courtroom.models import (
+    FailureClusterView,
+    RemediationAdviceView,
+    RetrialComparisonView,
+)
+from wonderland_court.engine.mock import MockTarget
+from wonderland_court.engine.runner import run_trial
+from wonderland_court.engine.store import CourtReader, CourtStore, RunRecord
+from wonderland_court.engine.store import RemediationAdvice as AdviceRow
+from wonderland_court.engine.store import RetrialComparison as ComparisonRow
+from wonderland_court.registry import CanaryJudge, ScriptedAttacker
 
-from .fakes import POISONED_EMAIL, FakeEmbeddingClient, FakeLLMClient, make_stakes
+from .fakes import (
+    POISONED_EMAIL,
+    FakeConfig,
+    FakeEmbeddingClient,
+    FakeLLMClient,
+    FakeModelClient,
+    make_stakes,
+)
 
 FAKE_RUN = Path(__file__).resolve().parents[2] / "fixtures" / "fake_run.jsonl"
 TS = datetime(2026, 11, 21, tzinfo=UTC)
 AGENT_FORBIDDEN = {"spotlighting", "sandwich", "dual_llm"}
-
-REMEDIATION_COLUMNS = {
-    "run_id",
-    "target_kind",
-    "clusters_json",
-    "recommended_defense",
-    "config_patch_yaml",
-    "rationale",
-}
-RETRIAL_COLUMNS = {
-    "retrial_run_id",
-    "baseline_run_id",
-    "matched_seeds_json",
-    "baseline_asr",
-    "retrial_asr",
-    "asr_delta",
-    "baseline_utility",
-    "retrial_utility",
-    "per_scenario_json",
-}
 
 
 def record(
@@ -425,10 +433,15 @@ def test_advice_row_and_config_patch(tmp_path: Path) -> None:
     clusters = asyncio.run(cluster_failures(records))
     advice = advise(records, clusters, target_kind=TargetKind.MODEL)
 
-    row = advice.to_row()
-    assert set(row) == REMEDIATION_COLUMNS
-    assert row["target_kind"] == "model"
-    assert [c["cluster_id"] for c in json.loads(row["clusters_json"])] == ["c1", "c2", "c3"]
+    row = advice.to_store()
+    assert row.run_id == "fake-run-0001"
+    assert row.target_kind is TargetKind.MODEL
+    assert row.recommended_defense == advice.recommended_defense
+    assert [c["cluster_id"] for c in row.clusters] == ["c1", "c2", "c3"]
+    views = [FailureClusterView.model_validate(c) for c in row.clusters]
+    assert [v.count for v in views] == [c.count for c in clusters]
+    assert views[0].example_match_ids == list(clusters[0].match_ids)
+    assert views[0].family_label == clusters[0].label
 
     lines = advice.config_patch_yaml.splitlines()
     assert lines[0].startswith("#") and "fake-run-0001" in lines[0]
@@ -486,13 +499,17 @@ def test_hardened_retrial_on_the_same_seeds_drops_asr() -> None:
     assert result.asr_delta == pytest.approx(-3 / 8)
     assert result.asr_delta < 0
 
-    row = result.to_row()
-    assert set(row) == RETRIAL_COLUMNS
-    assert row["baseline_utility"] == 0.96
-    assert row["retrial_utility"] == 0.78
-    seeds = json.loads(row["matched_seeds_json"])
-    assert [(s["scenario"], s["seed"]) for s in seeds] == expected
-    per = json.loads(row["per_scenario_json"])
+    row = result.to_store()
+    assert (row.baseline_run_id, row.retrial_run_id) == ("fake-run-0001", "fake-run-0002")
+    assert row.baseline_utility == 0.96
+    assert row.retrial_utility == 0.78
+    assert row.matched_seeds == [seed for _, seed in expected]
+    assert (row.baseline_asr, row.retrial_asr, row.asr_delta) == (
+        result.baseline_asr,
+        result.retrial_asr,
+        result.asr_delta,
+    )
+    per = row.per_scenario
     assert per["refund_tool"]["baseline_asr"] == pytest.approx(1 / 4)
     assert per["vault"]["baseline_asr"] == pytest.approx(2 / 4)
     assert per["vault"]["asr_delta"] == pytest.approx(-2 / 4)
@@ -548,11 +565,167 @@ def test_extra_retrial_match_on_a_used_seed_raises() -> None:
         compare_retrial(baseline, retrial)
 
 
-def test_registry_remediator_says_what_it_waits_on(tmp_path: Path) -> None:
-    from wonderland_court.adversaries.caterpillar import build_remediator
+# The registry's remediator, on runs in a real CourtStore
 
-    from .fakes import FakeConfig, FakeModelClient
 
-    remediator = build_remediator(config=FakeConfig(), client=FakeModelClient())
-    with pytest.raises(RuntimeError, match="CourtStore"):
-        asyncio.run(remediator.advise(tmp_path / "court.db", "run-1"))
+def remediator(client: FakeModelClient | None = None) -> CaterpillarRemediator:
+    return build_remediator(config=FakeConfig(), client=client or FakeModelClient())
+
+
+async def store_fake_run(db: Path) -> None:
+    """The recorded fixture, written to a CourtStore the way the runner writes a run."""
+    events = list(read_events(FAKE_RUN))
+    start = events[0]
+    assert isinstance(start, RunStarted)
+    config = CourtConfig.from_mapping(
+        {"target": start.targets[0], "defenses": start.defenses, "scenarios": start.scenarios}
+    )
+    specs: dict[str, MatchSpec] = {}
+    async with CourtStore(db) as store:
+        await store.create_run(
+            RunRecord(
+                run_id=start.run_id,
+                mode=start.mode,
+                target=start.targets[0],
+                target_kind=TargetKind.MODEL,
+                config=config.model_dump(mode="json"),
+            )
+        )
+        for event in events:
+            await store.append_event(event)
+            if isinstance(event, MatchStarted):
+                specs[event.match.match_id] = event.match
+            elif isinstance(event, MatchEnded):
+                await store.save_match_result(specs[event.match_id], event)
+
+
+async def mock_trial(store: CourtStore, defenses: list[str]) -> str:
+    """A `court trial --quick --mock` run: scripted Alice, attacker and judge."""
+    result = await run_trial(
+        CourtConfig.from_mapping({"target": MockTarget.name, "defenses": defenses}, "quick"),
+        target=MockTarget(),
+        attacker=ScriptedAttacker(),
+        judge=CanaryJudge(),
+        store=store,
+    )
+    return result.run_id
+
+
+def test_remediator_advises_from_the_store_and_saves_the_row(tmp_path: Path) -> None:
+    db, hardened = tmp_path / "court.db", tmp_path / "court.hardened.yaml"
+    asyncio.run(store_fake_run(db))
+    label = TargetReply(content='{"label": "Poisoned email", "summary": "Alice trusted it."}')
+    client = FakeModelClient(rules=[(r"refund_tool", label)])
+
+    row = asyncio.run(remediator(client).advise(db, "fake-run-0001", hardened_path=hardened))
+
+    expected = advise(
+        load_matches(FAKE_RUN),
+        asyncio.run(cluster_failures(load_matches(FAKE_RUN), embedder=client, llm=client)),
+        target_kind=TargetKind.MODEL,
+    ).to_store()
+    assert row == expected
+    assert row.recommended_defense == STACK_SPOTLIGHT
+    assert any(c["family_label"] == "Poisoned email" for c in row.clusters)
+    assert client.calls and all(c.model_spec == "llama3.1" for c in client.calls)
+    assert hardened.read_text(encoding="utf-8") == row.config_patch_yaml
+
+    async def saved() -> tuple[object, object]:
+        async with CourtReader(db) as reader:
+            stored = await reader.get_advice("fake-run-0001")
+        return stored, await CourtReadDB(db).get_advice("fake-run-0001")
+
+    stored, view = asyncio.run(saved())
+    assert stored == row
+    assert isinstance(view, RemediationAdviceView)
+    assert [c.cluster_id for c in view.clusters] == [c["cluster_id"] for c in row.clusters]
+
+
+def test_a_mock_runs_advice_stays_offline(tmp_path: Path) -> None:
+    client = FakeModelClient()
+
+    async def go() -> AdviceRow:
+        async with CourtStore(tmp_path / "court.db") as store:
+            run_id = await mock_trial(store, ["plain", "sandwich"])
+        return await remediator(client).advise(tmp_path / "court.db", run_id)
+
+    row = asyncio.run(go())
+    assert client.calls == []
+    assert len(row.clusters) == 3
+    assert all(c["family_label"] and c["root_cause_summary"] for c in row.clusters)
+
+
+def test_advise_needs_the_database_and_the_run(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.db"
+    with pytest.raises(FileNotFoundError, match="no court database"):
+        asyncio.run(remediator().advise(missing, "run-1"))
+    assert not missing.exists()
+
+    asyncio.run(store_fake_run(tmp_path / "court.db"))
+    with pytest.raises(LookupError, match="no run run-1"):
+        asyncio.run(remediator().advise(tmp_path / "court.db", "run-1"))
+
+
+def test_retrial_replays_the_baseline_seeds_and_saves_the_comparison(tmp_path: Path) -> None:
+    db = tmp_path / "court.db"
+    hardened = "input_filter+output_filter"
+
+    async def go() -> tuple[str, ComparisonRow, list[MatchSpec], list[MatchSpec], object]:
+        async with CourtStore(db, jsonl_dir=tmp_path / "runs") as store:
+            base = await mock_trial(store, ["plain", "sandwich"])
+            row = await remediator().retrial(
+                store,
+                base,
+                defense=hardened,
+                target=MockTarget(),
+                attacker=ScriptedAttacker(),
+                judge=CanaryJudge(),
+                utility=DodoUtility(),
+            )
+            run = await store.get_run(row.retrial_run_id)
+            assert run is not None and run.parent_run_id == base
+            assert run.config["defenses"] == [hardened]
+            assert await store.get_retrial_comparison(row.retrial_run_id) == row
+
+            def specs(events: list[Event]) -> list[MatchSpec]:
+                return [e.match for e in events if isinstance(e, MatchStarted)]
+
+            before = specs(await store.get_events_after(base))
+            after = specs(await store.get_events_after(row.retrial_run_id))
+        return base, row, before, after, await CourtReadDB(db).get_retrial_diff(base)
+
+    base, row, before, after, view = asyncio.run(go())
+    assert row.baseline_run_id == base
+    assert sorted(row.matched_seeds) == sorted(s.seed for s in before)
+    assert sorted((s.scenario, s.seed) for s in after) == sorted(
+        (s.scenario, s.seed) for s in before
+    )
+    assert {s.defense for s in after} == {hardened}
+    assert row.baseline_asr == pytest.approx(3 / 4)
+    assert row.retrial_asr == 0.0
+    assert row.asr_delta == pytest.approx(-3 / 4)
+    assert set(row.per_scenario) == {"vault", "refund_tool"}
+    assert row.baseline_utility is not None and 0.0 <= row.baseline_utility <= 1.0
+    assert row.retrial_utility is not None and 0.0 <= row.retrial_utility <= 1.0
+    assert isinstance(view, RetrialComparisonView)
+    assert view.retrial_run_id == row.retrial_run_id
+    assert view.per_scenario_diff["vault"]["asr_delta"] == pytest.approx(-2 / 2)
+
+
+def test_retrial_refuses_a_defense_before_it_starts_a_run(tmp_path: Path) -> None:
+    async def go() -> list[str]:
+        async with CourtStore(tmp_path / "court.db") as store:
+            base = await mock_trial(store, ["plain"])
+            with pytest.raises(ValueError):
+                await remediator().retrial(
+                    store,
+                    base,
+                    defense="moat",
+                    target=MockTarget(),
+                    attacker=ScriptedAttacker(),
+                    judge=CanaryJudge(),
+                    utility=DodoUtility(),
+                )
+            return [run.run_id for run in await store.list_runs()]
+
+    assert len(asyncio.run(go())) == 1
