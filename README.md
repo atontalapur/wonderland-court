@@ -60,6 +60,35 @@ uv run court trial      # terminal 2
 
 The Cheshire Cat attacks plain Alice in the `refund_tool` scenario. In our runs llama3.1 issued the $400 refund on turn 1, and the open dashboard showed "Off with her head!" as it happened. `court trial --quick` runs the bigger preset. The same path is tested offline by `uv run pytest tests/test_first_blood_e2e.py` and against Ollama by `OLLAMA_MODEL=qwen3.5:4b uv run pytest -m ollama`.
 
+## Gate pull requests
+
+`court ci` runs the trial and fails when any defense stack's attack success is above the budget: exit 0 within budget, 1 over, 2 when the trial can't run. Each stack in `court.yaml` is judged on its own, so list the stacks you ship. A `plain` baseline fails any budget below its own attack success.
+
+```bash
+court ci --fail-above 0.10 --sarif-out court-results.sarif
+```
+
+In another repository's workflow, the action runs `court ci`, writes the verdict to the job summary and uploads the findings to GitHub code scanning, even when the budget fails. It needs models to attack (start Ollama first, or use a hosted model), or `mock: "true"` for an offline run.
+
+```yaml
+permissions:
+  contents: read
+  security-events: write
+steps:
+  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  - uses: atontalapur/wonderland-court@<commit-sha>
+    with:
+      config: court.yaml
+      fail-above: "0.10"
+```
+
+Or run it in Docker, with Ollama on the host:
+
+```bash
+docker build -t wonderland-court .
+docker run --rm -v "$PWD:/work" wonderland-court ci --fail-above 0.10
+```
+
 ## How Wonderland Court compares
 
 | Tool | Focus | Defense tournament | Utility cost | Verified fix |
