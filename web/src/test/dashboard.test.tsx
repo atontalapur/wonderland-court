@@ -3,7 +3,7 @@ import path from "node:path";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import App from "../App";
+import App, { LIVE_RUNS_POLL_MS } from "../App";
 import { parseJsonlEvents } from "../api/staticLoader";
 import { useCourtStream, type UseCourtStreamOptions } from "../api/sse";
 import { CalibrationBadge } from "../components/CalibrationBadge";
@@ -588,5 +588,83 @@ describe("useCourtStream & App lifecycle guarantees", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("leaderboard-row-plain")).not.toBeInTheDocument();
     });
+  });
+});
+
+describe("Live dashboard follows runs that start after it loads", () => {
+  const summary = aggregateEvents(FAKE_EVENTS).summary!;
+  const newRun = { ...summary, run_id: "run-new", status: "running" as const };
+
+  function stubLiveServer(runLists: (typeof summary)[][]) {
+    let calls = 0;
+    vi.stubGlobal("EventSource", MockEventSource);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/health") {
+          return { ok: true, json: async () => ({ status: "ok", mode: "live" }) };
+        }
+        if (url === "/api/runs") {
+          const runs = runLists[Math.min(calls, runLists.length - 1)];
+          calls += 1;
+          return { ok: true, json: async () => ({ runs }) };
+        }
+        const runId = decodeURIComponent(url.split("/")[3]);
+        const run = runId === summary.run_id ? summary : newRun;
+        return {
+          ok: true,
+          json: async () => ({
+            summary: run,
+            events: [],
+            matches: [],
+            standings: [],
+            heatmap: { run_id: runId, defenses: [], families: [], scenarios: [], cells: [] },
+            calibration: null,
+            advice: null,
+            retrial: null,
+          }),
+        };
+      })
+    );
+  }
+
+  const streamUrls = () => MockEventSource.instances.map((es) => es.url);
+
+  afterEach(() => {
+    MockEventSource.instances = [];
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("subscribes to a run that appears after the page opened on an empty database", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubLiveServer([[], [newRun]]);
+
+    render(<App />);
+    await screen.findByText(/Awaiting the first match/);
+    expect(MockEventSource.instances).toHaveLength(0);
+
+    await act(() => vi.advanceTimersByTimeAsync(LIVE_RUNS_POLL_MS));
+    await waitFor(() => expect(streamUrls()).toContain("/api/runs/run-new/stream"));
+  });
+
+  it("switches to a newer run unless the user picked one", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubLiveServer([[summary], [newRun, summary]]);
+
+    render(<App />);
+    await waitFor(() => expect(streamUrls()).toContain(`/api/runs/${summary.run_id}/stream`));
+
+    await act(() => vi.advanceTimersByTimeAsync(LIVE_RUNS_POLL_MS));
+    await waitFor(() => expect(streamUrls()).toContain("/api/runs/run-new/stream"));
+
+    const selector = screen.getByLabelText("Select active run");
+    fireEvent.change(selector, { target: { value: summary.run_id } });
+    const opened = MockEventSource.instances.length;
+    await act(() => vi.advanceTimersByTimeAsync(LIVE_RUNS_POLL_MS * 2));
+    expect(MockEventSource.instances.at(-1)?.url).toBe(`/api/runs/${summary.run_id}/stream`);
+    expect(MockEventSource.instances.length).toBe(opened);
   });
 });
