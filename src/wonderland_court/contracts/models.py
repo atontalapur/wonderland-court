@@ -5,6 +5,7 @@ other instead of being dropped.
 """
 
 from enum import StrEnum
+from importlib.metadata import entry_points
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,12 +15,45 @@ class Contract(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+SCENARIO_PLUGINS = "wonderland_court.scenarios"
+"""The entry point group of scenario plugins. `engine/plugins.py` loads them."""
+
+
+# The built-in scenarios, plus any scenario an installed plugin adds: `ScenarioId("heist")` is
+# valid when an installed package declares a `heist` entry point in `SCENARIO_PLUGINS`. Such an
+# id behaves like a built-in one, but iterating `ScenarioId` and the JSON schema list only the
+# built-in five. Built-in ids always win. (A comment, not a docstring, so the schema is unchanged.)
 class ScenarioId(StrEnum):
     VAULT = "vault"
     SYSTEM_PROMPT = "system_prompt"
     REFUND_TOOL = "refund_tool"
     DRINK_ME = "drink_me"
     MCP_POISON = "mcp_poison"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "ScenarioId | None":
+        return _plugin_scenario(value)
+
+
+_PLUGIN_SCENARIOS: dict[str, ScenarioId] = {}
+
+
+def _plugin_scenario(value: object) -> ScenarioId | None:
+    """The id for a scenario plugin's name. Reads package metadata only, and imports nothing."""
+    if not isinstance(value, str):
+        return None
+    if value not in _PLUGIN_SCENARIOS:
+        try:
+            declared = {point.name for point in entry_points(group=SCENARIO_PLUGINS)}
+        except Exception:  # one package's bad metadata must not break validation
+            return None
+        if value not in declared:
+            return None
+        member = str.__new__(ScenarioId, value)
+        member._name_ = value
+        member._value_ = value
+        _PLUGIN_SCENARIOS[value] = member
+    return _PLUGIN_SCENARIOS[value]
 
 
 class TargetKind(StrEnum):
