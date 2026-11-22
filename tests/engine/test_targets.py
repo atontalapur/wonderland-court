@@ -148,9 +148,6 @@ async def _check_spec(spec: str, name: str) -> None:
         ("openai-compat:http://localhost:1234/v1|", "openai-compat:<base_url>|<model>"),
         ("openai-compat:|qwen2.5", "openai-compat:<base_url>|<model>"),
         ("openai-compat:localhost:1234|qwen2.5", "openai-compat:<base_url>|<model>"),
-        ("python:my_pkg.agent:respond", "agent target"),
-        ("http://localhost:8000/chat", "agent target"),
-        ("https://agent.example/chat", "agent target"),
         ("llama 3.1", "not a model target"),
         ("ollama:qwen3.5:4b:extra", "not a model target"),
         ("openai-compatible:http://x/v1|m", "not a model target"),
@@ -161,9 +158,13 @@ def test_bad_specs_raise_helpful_errors(spec: str, error: str) -> None:
         build_target(spec, FakeClient())
 
 
-def test_agent_spec_error_points_at_issue_19() -> None:
-    with pytest.raises(ValueError, match="#19"):
-        build_target("python:my_pkg.agent:respond", FakeClient())
+@pytest.mark.parametrize(
+    "spec", ["python:my_pkg.agent:respond", "http://localhost:8000/chat", "https://a.example/chat"]
+)
+def test_agent_specs_are_not_model_ids(spec: str) -> None:
+    # build_target sends these to the agent adapters (see test_byo_adapters.py).
+    with pytest.raises(ValueError, match="agent target"):
+        canonical_spec(spec)
 
 
 # Requests

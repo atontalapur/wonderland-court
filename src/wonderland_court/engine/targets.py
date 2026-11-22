@@ -1,4 +1,7 @@
-"""Alice as a model target.
+"""Alice as a model target, and `build_target` for every kind of target.
+
+`build_target` sends `python:` specs, http(s) URLs and `court.yaml` target blocks to the agent
+adapters in `agent_targets.py`, and everything else here.
 
 Court owns the prompt, tools and documents of a model target, so every defense applies. The
 shared LLM client does the network work: it resolves the provider, base URL and API key from
@@ -17,6 +20,7 @@ from collections.abc import Iterator, Sequence
 from time import perf_counter
 from typing import Any, Protocol
 
+from wonderland_court.config import HttpTargetConfig, PythonTargetConfig, TargetConfig
 from wonderland_court.contracts import (
     Document,
     Message,
@@ -80,8 +84,7 @@ def canonical_spec(spec: str) -> str:
 
     if prefix in AGENT_PREFIXES:
         raise ValueError(
-            f"{spec!r} is an agent target. HTTP and Python agent adapters are issue #19, "
-            f"not model targets. {_USAGE}"
+            f"{spec!r} is an agent target, not a model target. Build it with build_target. {_USAGE}"
         )
     if prefix == "openai-compat":
         base_url, bar, model = rest.partition("|")
@@ -159,7 +162,7 @@ def parse_tool_calls(content: str, tools: Sequence[ToolSpec]) -> list[ToolCall]:
     schemas = {tool.name: tool.parameters for tool in tools}
     calls: list[ToolCall] = []
     for value in _json_values(content):
-        for name, arguments in _calls_in(value):
+        for name, arguments in calls_in(value):
             if name in schemas:
                 coerced = tool_arguments(json.dumps(arguments), schemas[name])
                 calls.append(ToolCall(id=f"call-{len(calls) + 1}", name=name, arguments=coerced))
@@ -178,15 +181,21 @@ def _json_values(text: str) -> Iterator[Any]:
         yield value
 
 
-def _calls_in(value: Any) -> Iterator[tuple[str, dict[str, Any]]]:
+def calls_in(value: Any) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Every `(name, arguments)` tool call in parsed JSON, in order. Agent adapters use it too.
+
+    A call is `{"name": ..., "arguments": {...}}` with `parameters` accepted for the arguments,
+    optionally wrapped in `{"function": {...}}`, inside a list or under `"tool_calls"`. String
+    arguments are parsed as JSON. Tool definitions echoed back and malformed calls are skipped.
+    """
     if isinstance(value, list):
         for item in value:
-            yield from _calls_in(item)
+            yield from calls_in(item)
         return
     if not isinstance(value, dict):
         return
     if isinstance(value.get("tool_calls"), list):
-        yield from _calls_in(value["tool_calls"])
+        yield from calls_in(value["tool_calls"])
         return
     if isinstance(value.get("function"), dict):
         value = value["function"]
@@ -249,12 +258,38 @@ class ModelTarget:
         return reply.model_copy(update=update) if update else reply
 
 
+def is_agent_target(spec: TargetConfig) -> bool:
+    """Whether a `court.yaml` target is a black-box agent: `python:`, an http(s) URL or a block."""
+    return not isinstance(spec, str) or spec.strip().partition(":")[0].lower() in AGENT_PREFIXES
+
+
 def build_target(
-    spec: str,
+    spec: TargetConfig,
     llm: ChatClient | None = None,
     *,
     temperature: float = 0.0,
     seed: int | None = None,
 ) -> Target:
-    """The target for a target id. Model targets only, until agent targets land in #19."""
+    """The target for a target id or a `court.yaml` target block.
+
+    `python:<module.path>:<callable>` and a `{kind: python}` block build a Python agent, and an
+    http(s) URL or a `{kind: http}` block builds an HTTP agent. Anything else is a model id.
+    `llm`, `temperature` and `seed` only apply to model targets: an agent picks its own.
+    """
+    # agent_targets imports this module, so import it here rather than at the top.
+    from .agent_targets import HttpAgentTarget, PythonAgentTarget
+
+    if isinstance(spec, HttpTargetConfig):
+        return HttpAgentTarget(spec)
+    if isinstance(spec, PythonTargetConfig):
+        return PythonAgentTarget(spec.entrypoint)
+    spec = spec.strip()
+    head, _, rest = spec.partition(":")
+    prefix = head.lower()
+    if prefix == "python":
+        return PythonAgentTarget(rest)
+    if prefix in ("http", "https"):
+        if not rest.startswith("//"):
+            raise ValueError(f"{spec!r} should be a full URL, such as http://localhost:8000/chat.")
+        return HttpAgentTarget(HttpTargetConfig(kind="http", url=spec))
     return ModelTarget(spec, llm, temperature=temperature, seed=seed)
