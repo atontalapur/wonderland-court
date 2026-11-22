@@ -1,4 +1,4 @@
-import { Check, Copy, Wrench } from "lucide-react";
+import { Check, Copy, Loader2, Sparkles, Wrench } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { CHARACTERS, formatDefenseName } from "../theme/wonderland";
 import type {
@@ -17,12 +17,24 @@ interface CaterpillarPanelProps {
     title: string,
     subtitle?: string
   ) => void;
+  studioEnabled?: boolean;
+  canRunActions?: boolean;
+  advising?: boolean;
+  retrying?: boolean;
+  onAskCaterpillar?: () => Promise<void>;
+  onRunRetrial?: (defense?: string) => Promise<void>;
 }
 
 export function CaterpillarPanel({
   advice,
   retrial,
   onInspectMatches,
+  studioEnabled = false,
+  canRunActions = false,
+  advising = false,
+  retrying = false,
+  onAskCaterpillar,
+  onRunRetrial,
 }: CaterpillarPanelProps) {
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<number | null>(null);
@@ -58,19 +70,37 @@ export function CaterpillarPanel({
         >
           <CharacterAvatar character={CHARACTERS.caterpillar} size="lg" />
 
-          <div className="flex-1 space-y-2">
+          <div className="flex-1 space-y-3">
             <div className="speech-bubble-left rounded-2xl border-2 border-[#a7dfd8] bg-[#f2fbfa] p-5 text-[#143330] shadow-bubble">
               <h2 className="font-editorial text-lg font-bold">
                 “Who are you… and how shall we harden Alice?”
               </h2>
               <p className="mt-2 text-sm leading-relaxed text-[#2d4e4a]">
-                No advice scroll has been written for this run yet. Run{" "}
-                <code className="rounded-md bg-[#dff4f0] px-2 py-0.5 font-mono text-xs font-bold text-[#0f766e]">
-                  court advise
-                </code>{" "}
-                in your terminal and I will group every failure and write a
-                ready-to-use defense patch for you.
+                {studioEnabled && canRunActions
+                  ? "Click below and I will group every breach from this trial, diagnose the root causes, and write a hardened defense shield for Alice."
+                  : "No advice scroll has been written for this run yet. Run court advise to group every failure and generate a hardened defense patch."}
               </p>
+
+              {studioEnabled && canRunActions && onAskCaterpillar && (
+                <button
+                  type="button"
+                  disabled={advising}
+                  onClick={() => void onAskCaterpillar()}
+                  className="mt-4 inline-flex items-center gap-2 rounded-xl bg-[#0f766e] px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-[#115e59] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {advising ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>Caterpillar is analyzing…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-4 w-4" />
+                      <span>Ask the Caterpillar for Advice</span>
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -141,7 +171,13 @@ export function CaterpillarPanel({
         </>
       )}
 
-      <RetrialDiffCard retrial={retrial} />
+      <RetrialDiffCard
+        retrial={retrial}
+        studioEnabled={studioEnabled && canRunActions}
+        retrying={retrying}
+        recommendedDefense={advice?.recommended_defense}
+        onRunRetrial={onRunRetrial}
+      />
     </div>
   );
 }

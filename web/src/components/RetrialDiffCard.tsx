@@ -1,9 +1,13 @@
-import { ArrowRight, GitCompare, ShieldCheck } from "lucide-react";
-import { formatScenario } from "../theme/wonderland";
+import { ArrowRight, GitCompare, Loader2, ShieldCheck } from "lucide-react";
+import { formatDefenseName, formatScenario } from "../theme/wonderland";
 import type { RetrialComparisonView, ScenarioId } from "../types/events";
 
 interface RetrialDiffCardProps {
   retrial: RetrialComparisonView | null;
+  studioEnabled?: boolean;
+  retrying?: boolean;
+  recommendedDefense?: string;
+  onRunRetrial?: (defense?: string) => Promise<void>;
 }
 
 function readScenarioPair(metrics: Record<string, number>): {
@@ -25,27 +29,54 @@ function readScenarioPair(metrics: Record<string, number>): {
   return { before, after };
 }
 
-export function RetrialDiffCard({ retrial }: RetrialDiffCardProps) {
+export function RetrialDiffCard({
+  retrial,
+  studioEnabled = false,
+  retrying = false,
+  recommendedDefense,
+  onRunRetrial,
+}: RetrialDiffCardProps) {
   if (!retrial) {
     return (
       <div
         className="storybook-card rounded-3xl p-6"
         data-testid="retrial-empty-state"
       >
-        <div className="flex items-start gap-3">
-          <GitCompare className="mt-0.5 h-5 w-5 text-[#8c7a64]" />
-          <div>
-            <h3 className="font-editorial text-base font-bold text-[#231f1a]">
-              Before & After Retrial
-            </h3>
-            <p className="mt-1 text-xs leading-relaxed text-[#6b5e4e]">
-              Once you apply the Caterpillar’s patch, run{" "}
-              <code className="rounded bg-[#f2e7d3] px-1.5 py-0.5 font-mono text-[#8c3f0b]">
-                court retrial
-              </code>{" "}
-              to replay the exact same attacks and verify Alice holds firm.
-            </p>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <GitCompare className="mt-0.5 h-5 w-5 shrink-0 text-[#8c7a64]" />
+            <div>
+              <h3 className="font-editorial text-base font-bold text-[#231f1a]">
+                Before & After Retrial
+              </h3>
+              <p className="mt-1 text-xs leading-relaxed text-[#6b5e4e]">
+                {studioEnabled
+                  ? `Replay the exact same attacks with ${formatDefenseName(recommendedDefense ?? "spotlighting+output_filter")} right here on your laptop to verify Alice holds firm.`
+                  : "Once you apply the Caterpillar’s patch, run court retrial to replay the exact same attacks and verify Alice holds firm."}
+              </p>
+            </div>
           </div>
+
+          {studioEnabled && onRunRetrial && (
+            <button
+              type="button"
+              disabled={retrying}
+              onClick={() => void onRunRetrial(recommendedDefense)}
+              className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-[#2b5b84] px-4 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-[#1e4568] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {retrying ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>Running Retrial…</span>
+                </>
+              ) : (
+                <>
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  <span>Run Seed-Locked Retrial</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
     );
