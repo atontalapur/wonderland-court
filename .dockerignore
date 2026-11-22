@@ -1,0 +1,11 @@
+# Send only what the wheel is built from. The Courtroom UI is prebuilt in
+# src/wonderland_court/courtroom/static, so web/ and Node aren't needed.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!src/
+**/__pycache__/
+**/*.py[cod]
+**/.DS_Store

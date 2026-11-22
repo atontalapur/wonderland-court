@@ -1,0 +1,115 @@
+name: Wonderland Court
+description: >
+  Put your AI agent on trial in CI. Runs `court ci`, fails the job when a defense stack's
+  attack success is over budget, and uploads the findings to GitHub code scanning.
+author: atontalapur
+branding:
+  icon: shield
+  color: purple
+
+# Court is installed from this action's own checkout with the locked dependencies, so
+# `uses: atontalapur/wonderland-court@<sha>` runs exactly that commit of Court. It runs on
+# Linux and macOS runners, from the repository root: SARIF locations are relative to it.
+#
+# Court needs models to attack. Start Ollama in an earlier step (this repo's
+# .github/actions/setup-ollama does that), or point court.yaml at a hosted model and pass its
+# API key in `env`. `mock: true` needs no models.
+#
+# The job needs `security-events: write` for the upload, plus `contents: read` and
+# `actions: read` in a private repository. Pull requests from forks get a read-only token, so
+# turn the upload off there: `upload-sarif: ${{ !github.event.pull_request.head.repo.fork }}`.
+
+inputs:
+  config:
+    description: Path to court.yaml from the repository root.
+    default: court.yaml
+  fail-above:
+    description: Fail when any defense stack's attack success is above this share, from 0 to 1.
+    default: "0.10"
+  sarif-file:
+    description: Where to write the SARIF findings.
+    default: court-results.sarif
+  upload-sarif:
+    description: Upload the SARIF file to GitHub code scanning, even when the budget fails.
+    default: "true"
+  category:
+    description: Code scanning category, to keep the results of several configs apart.
+    default: ""
+  quick:
+    description: Use the quick preset (fewer stacks, scenarios and turns).
+    default: "false"
+  mock:
+    description: Run offline against a scripted target, attacker and judge. No models needed.
+    default: "false"
+  python-version:
+    description: Python to run Court on (3.11 or newer).
+    default: "3.12"
+
+outputs:
+  exit-code:
+    description: "`court ci`'s exit code: 0 within budget, 1 over budget, 2 error."
+    value: ${{ steps.court.outputs.exit-code }}
+  sarif-file:
+    description: Path of the SARIF file, empty when none was written.
+    value: ${{ steps.court.outputs.sarif-file }}
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+      with:
+        enable-cache: "false"
+
+    - name: Install Wonderland Court
+      shell: bash
+      env:
+        PYTHON_VERSION: ${{ inputs.python-version }}
+        UV_PROJECT_ENVIRONMENT: ${{ github.action_path }}/.venv
+      run: |
+        set -euo pipefail
+        uv sync --locked --no-dev --no-editable --python "$PYTHON_VERSION" \
+          --project "$GITHUB_ACTION_PATH"
+        # Put only `court` on PATH for later steps, not the environment's python.
+        bin="$RUNNER_TEMP/wonderland-court/bin"
+        mkdir -p "$bin"
+        ln -sf "$UV_PROJECT_ENVIRONMENT/bin/court" "$bin/court"
+        echo "$bin" >> "$GITHUB_PATH"
+
+    - name: Run court ci
+      id: court
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        FAIL_ABOVE: ${{ inputs.fail-above }}
+        SARIF_FILE: ${{ inputs.sarif-file }}
+        QUICK: ${{ inputs.quick }}
+        MOCK: ${{ inputs.mock }}
+      run: |
+        set -uo pipefail
+        args=(ci --config "$CONFIG" --fail-above "$FAIL_ABOVE" --sarif-out "$SARIF_FILE")
+        if [ "$QUICK" = true ]; then args+=(--quick); fi
+        if [ "$MOCK" = true ]; then args+=(--mock); fi
+        # Keep going whatever the verdict, so the findings are uploaded before the job fails.
+        code=0
+        court "${args[@]}" || code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        if [ -f "$SARIF_FILE" ]; then echo "sarif-file=$SARIF_FILE" >> "$GITHUB_OUTPUT"; fi
+
+    - name: Upload findings to code scanning
+      if: always() && inputs.upload-sarif == 'true' && steps.court.outputs.sarif-file != ''
+      uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+      with:
+        sarif_file: ${{ steps.court.outputs.sarif-file }}
+        category: ${{ inputs.category }}
+
+    - name: Enforce the budget
+      if: always() && steps.court.outcome == 'success'
+      shell: bash
+      env:
+        CODE: ${{ steps.court.outputs.exit-code }}
+      run: |
+        case "$CODE" in
+          0) ;;
+          1) echo "::error title=Wonderland Court::A defense stack is over the attack success budget. See the job summary."; exit 1 ;;
+          *) echo "::error title=Wonderland Court::court ci couldn't judge the run (exit $CODE). See the log above."; exit "$CODE" ;;
+        esac
