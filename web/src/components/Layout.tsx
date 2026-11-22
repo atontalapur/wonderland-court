@@ -1,9 +1,9 @@
 import {
-  Activity,
-  BarChart3,
-  Heart,
+  ChevronRight,
   PlayCircle,
   Sparkles,
+  Swords,
+  Trophy,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type {
@@ -11,7 +11,6 @@ import type {
   RunSummary,
   StreamConnectionMode,
 } from "../types/events";
-import { CalibrationBadge } from "./CalibrationBadge";
 
 export type DashboardTab = "feed" | "leaderboard" | "caterpillar";
 
@@ -30,41 +29,22 @@ interface LayoutProps {
   children: ReactNode;
 }
 
-function modeBadgeProps(mode: StreamConnectionMode) {
-  switch (mode) {
-    case "live":
-      return {
-        label: "LIVE",
-        cls: "border-rose-500/50 bg-rose-500/15 text-rose-300",
-        dot: "bg-rose-500 animate-pulse",
-      };
-    case "replaying":
-      return {
-        label: "REPLAY",
-        cls: "border-amber-500/50 bg-amber-500/15 text-amber-300",
-        dot: "bg-amber-400 animate-pulse",
-      };
-    case "static":
-      return {
-        label: "PUBLIC BENCHMARK",
-        cls: "border-emerald-500/40 bg-emerald-500/15 text-emerald-300",
-        dot: "bg-emerald-400",
-      };
-    case "disconnected":
-      return {
-        label: "DISCONNECTED",
-        cls: "border-slate-600 bg-slate-800/60 text-slate-300",
-        dot: "bg-slate-400",
-      };
-  }
-}
+const STEPS: {
+  id: DashboardTab;
+  stepNum: number;
+  label: string;
+  Icon: typeof Swords;
+}[] = [
+  { id: "feed", stepNum: 1, label: "Watch the Trial", Icon: Swords },
+  { id: "leaderboard", stepNum: 2, label: "Scoreboard", Icon: Trophy },
+  { id: "caterpillar", stepNum: 3, label: "Caterpillar's Fix", Icon: Sparkles },
+];
 
 export function Layout({
   runs,
   selectedRunId,
   onSelectRun,
   connectionMode,
-  calibration,
   activeTab,
   onTabChange,
   activeSummary,
@@ -73,102 +53,126 @@ export function Layout({
   canTriggerReplay,
   children,
 }: LayoutProps) {
-  const modeMeta = modeBadgeProps(connectionMode);
-
-  const tabs: { id: DashboardTab; label: string; Icon: typeof Activity }[] = [
-    { id: "feed", label: "Courtroom Feed", Icon: Activity },
-    { id: "leaderboard", label: "Leaderboard & Heatmap", Icon: BarChart3 },
-    { id: "caterpillar", label: "Caterpillar Fix & Retrial", Icon: Sparkles },
-  ];
+  const activeIndex = STEPS.findIndex((s) => s.id === activeTab);
 
   return (
-    <div className="min-h-screen bg-[#0b0d14] text-slate-100">
-      <header className="sticky top-0 z-30 border-b border-[#23293a] bg-[#0b0d14]/95 backdrop-blur">
-        <div className="mx-auto max-w-7xl px-4 py-3.5 sm:px-6">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            {/* Wonderland Court Crest */}
+    <div className="min-h-screen text-[#231f1a]">
+      <header className="sticky top-0 z-30 border-b border-[#e4d2b4] bg-[#fffdf9]/95 backdrop-blur">
+        <div className="mx-auto max-w-5xl px-4 py-3.5 sm:px-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            {/* Wonderland Court Storybook Crest */}
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-rose-500/40 bg-rose-950/30 shadow-inner">
-                <Heart className="h-5 w-5 fill-rose-500 text-rose-500" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl border-2 border-[#e58b99] bg-[#fff1f2] font-editorial text-lg font-bold text-[#c81e3a] shadow-sm">
+                ♥
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h1 className="font-editorial text-xl font-bold tracking-tight text-white">
+                  <h1 className="font-editorial text-xl font-bold tracking-tight text-[#231f1a]">
                     Wonderland Court
                   </h1>
-                  <span
-                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-bold tracking-wider ${modeMeta.cls}`}
-                    data-testid="mode-pill"
-                  >
-                    <span className={`h-1.5 w-1.5 rounded-full ${modeMeta.dot}`} />
-                    {modeMeta.label}
-                  </span>
+                  {connectionMode === "live" && (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full border border-[#f5b7c2] bg-[#fff1f2] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#a5152e]"
+                      data-testid="mode-pill"
+                    >
+                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#c81e3a]" />
+                      Live
+                    </span>
+                  )}
+                  {connectionMode === "replaying" && (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full border border-[#f5c26b] bg-[#fef3c7] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#92400e]"
+                      data-testid="mode-pill"
+                    >
+                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#d97706]" />
+                      Replay
+                    </span>
+                  )}
                 </div>
-                <p className="text-xs text-slate-400">
-                  {activeSummary
-                    ? `${activeSummary.targets.join(", ")} · ${activeSummary.matches} matches · ${activeSummary.leaks} leaks (${activeSummary.mode})`
-                    : "AI Agent Adversarial Red-Team Arena"}
-                </p>
+                {activeSummary && (
+                  <p className="text-xs text-[#6b5e4e]">
+                    {activeSummary.matches} trials ·{" "}
+                    {activeSummary.matches - activeSummary.leaks} held ·{" "}
+                    {activeSummary.leaks} breached
+                  </p>
+                )}
               </div>
             </div>
 
-            {/* Run Selector & Calibration */}
-            <div className="flex flex-wrap items-center gap-2.5">
+            {/* Compact Controls */}
+            <div className="flex flex-wrap items-center gap-2">
               {runs.length > 0 && (
-                <label className="inline-flex items-center gap-2 text-xs text-slate-400">
-                  <span>Run</span>
-                  <select
-                    aria-label="Select active run"
-                    value={selectedRunId ?? ""}
-                    onChange={(e) => onSelectRun(e.target.value)}
-                    className="rounded-lg border border-[#23293a] bg-[#131722] px-2.5 py-1.5 font-mono text-xs text-slate-100 focus:border-amber-400 focus:outline-none"
-                  >
-                    {runs.map((r) => (
-                      <option key={r.run_id} value={r.run_id}>
-                        {r.run_id} ({r.leaks}/{r.matches} leaks)
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <select
+                  aria-label="Select active run"
+                  value={selectedRunId ?? ""}
+                  onChange={(e) => onSelectRun(e.target.value)}
+                  className="rounded-xl border border-[#dec8a4] bg-[#faf4e8] px-3 py-1.5 text-xs font-semibold text-[#3a3026] transition hover:border-[#b49464] focus:border-[#2b5b84] focus:outline-none"
+                >
+                  {runs.map((r) => (
+                    <option key={r.run_id} value={r.run_id}>
+                      {r.run_id} ({r.leaks}/{r.matches} breached)
+                    </option>
+                  ))}
+                </select>
               )}
 
               {canTriggerReplay && onTriggerReplay && (
                 <button
                   type="button"
                   onClick={onTriggerReplay}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-300 transition hover:bg-amber-500/20"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-[#e4d2b4] bg-[#fffdf9] px-3 py-1.5 text-xs font-semibold text-[#6b4f2b] transition hover:border-[#d97706] hover:bg-[#fef3c7]/50"
                 >
-                  <PlayCircle className="h-3.5 w-3.5" />
-                  Replay Run
+                  <PlayCircle className="h-3.5 w-3.5 text-[#b45309]" />
+                  Replay
                 </button>
               )}
-
-              <CalibrationBadge calibration={calibration} />
             </div>
           </div>
 
-          {/* Primary Navigation Tabs */}
+          {/* Linear 3-Step Storybook Navigation */}
           <nav
-            className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-[#23293a]/70 pt-3"
-            aria-label="Courtroom sections"
+            className="mt-3.5 flex items-center gap-1.5 overflow-x-auto border-t border-[#efe2cc] pt-3"
+            aria-label="Courtroom steps"
           >
-            {tabs.map(({ id, label, Icon }) => {
+            {STEPS.map(({ id, stepNum, label, Icon }, idx) => {
               const active = activeTab === id;
+              const completed = idx < activeIndex;
               return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => onTabChange(id)}
-                  aria-current={active ? "page" : undefined}
-                  className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold transition ${
-                    active
-                      ? "border border-amber-500/40 bg-[#191f2e] text-amber-200 shadow-sm"
-                      : "border border-transparent text-slate-400 hover:bg-[#131722] hover:text-slate-200"
-                  }`}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  <span>{label}</span>
-                </button>
+                <div key={id} className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => onTabChange(id)}
+                    aria-current={active ? "step" : undefined}
+                    className={`inline-flex items-center gap-2 whitespace-nowrap rounded-full px-3.5 py-1.5 text-xs font-semibold transition ${
+                      active
+                        ? "bg-[#2b5b84] text-white shadow-sm"
+                        : completed
+                          ? "border border-[#b7cfe8] bg-[#eff6ff] text-[#1e4568] hover:bg-[#dbeafe]"
+                          : "border border-[#e4d2b4] bg-[#faf4e8] text-[#5c4f41] hover:border-[#cfb489] hover:text-[#231f1a]"
+                    }`}
+                  >
+                    <span
+                      className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${
+                        active
+                          ? "bg-white/20 text-white"
+                          : completed
+                            ? "bg-[#2b5b84] text-white"
+                            : "bg-[#e8dac2] text-[#5c4f41]"
+                      }`}
+                    >
+                      {stepNum}
+                    </span>
+                    <Icon className="h-3.5 w-3.5" />
+                    <span>{label}</span>
+                  </button>
+
+                  {idx < STEPS.length - 1 && (
+                    <ChevronRight
+                      className="h-4 w-4 shrink-0 text-[#cfb489]"
+                      aria-hidden="true"
+                    />
+                  )}
+                </div>
               );
             })}
           </nav>
@@ -177,7 +181,7 @@ export function Layout({
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">{children}</main>
+      <main className="mx-auto max-w-5xl px-4 py-6 sm:px-6">{children}</main>
     </div>
   );
 }

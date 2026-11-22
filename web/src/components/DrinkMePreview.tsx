@@ -10,7 +10,8 @@ interface TextSegment {
   highlighted: boolean;
 }
 
-const DIRECTIVE_PATTERN = /(<!--[\s\S]*?-->|(?:NOTE TO ASSISTANT|\[SYSTEM\]|IGNORE PREVIOUS|SYSTEM OVERRIDE)[^\n]*)/gi;
+const DIRECTIVE_PATTERN =
+  /(<!--[\s\S]*?-->|(?:NOTE TO ASSISTANT|\[SYSTEM\]|IGNORE PREVIOUS|SYSTEM OVERRIDE)[^\n]*)/gi;
 
 function splitHighlightedSegments(body: string): TextSegment[] {
   const segments: TextSegment[] = [];
@@ -60,40 +61,37 @@ export function DrinkMePreview({ document }: DrinkMePreviewProps) {
 
   return (
     <div
-      className={`mt-3 overflow-hidden rounded-lg border ${
+      className={`mt-3 overflow-hidden rounded-xl border-2 ${
         document.poisoned
-          ? "border-rose-500/40 bg-[#150e17]"
-          : "border-[#23293a] bg-[#0b0d14]"
+          ? "border-[#e58b99] bg-[#fff7f8]"
+          : "border-[#e4d2b4] bg-[#fffdf9]"
       }`}
       data-testid="drink-me-preview"
     >
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#23293a]/80 bg-[#0f131d] px-3 py-2 text-xs">
-        <div className="flex items-center gap-2 text-slate-300">
-          <Icon className="h-3.5 w-3.5 text-amber-400" />
-          <span className="font-semibold uppercase tracking-wider text-amber-300">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#eed8c0] bg-[#faf1e1] px-3 py-2 text-xs">
+        <div className="flex items-center gap-2 text-[#4c3f31]">
+          <Icon className="h-3.5 w-3.5 text-[#b45309]" />
+          <span className="font-editorial font-bold text-[#8c3f0b]">
             Drink Me · {label}
           </span>
-          <span className="text-slate-500">·</span>
-          <span className="font-medium text-slate-200">{document.title}</span>
-          <span className="font-mono text-[11px] text-slate-500">
-            ({document.id})
-          </span>
+          <span className="text-[#c5ad8c]">·</span>
+          <span className="font-semibold text-[#231f1a]">{document.title}</span>
         </div>
 
         {document.poisoned && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/50 bg-rose-500/15 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-rose-300">
+          <span className="inline-flex items-center gap-1 rounded-full border border-[#f5b7c2] bg-[#ffe4e8] px-2.5 py-0.5 text-[11px] font-bold text-[#a5152e]">
             <AlertTriangle className="h-3 w-3" />
             Poisoned
           </span>
         )}
       </div>
 
-      <pre className="overflow-x-auto whitespace-pre-wrap break-words p-3 font-mono text-xs leading-relaxed text-slate-300">
+      <pre className="overflow-x-auto whitespace-pre-wrap break-words p-3 font-mono text-xs leading-relaxed text-[#3d342b]">
         {segments.map((seg, idx) =>
           seg.highlighted ? (
             <mark
               key={idx}
-              className="rounded border border-rose-500/40 bg-rose-500/20 px-1 py-0.5 text-rose-200"
+              className="rounded border border-[#f09aa9] bg-[#ffdce2] px-1 py-0.5 font-semibold text-[#881326]"
             >
               {seg.text}
             </mark>

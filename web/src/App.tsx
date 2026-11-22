@@ -1,3 +1,4 @@
+import { ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   fetchHealth,
@@ -8,7 +9,6 @@ import {
 import { useCourtStream } from "./api/sse";
 import { CaterpillarPanel } from "./components/CaterpillarPanel";
 import { CourtroomFeed } from "./components/CourtroomFeed";
-import { DefenseTradeoffPlot } from "./components/DefenseTradeoffPlot";
 import { Layout, type DashboardTab } from "./components/Layout";
 import { LeaderboardTable } from "./components/LeaderboardTable";
 import { ReplayControls } from "./components/ReplayControls";
@@ -18,6 +18,7 @@ import {
 } from "./components/TechniqueHeatmap";
 import { TranscriptDrawer } from "./components/TranscriptDrawer";
 import { aggregateEvents } from "./state/streamAggregator";
+import { formatDefenseName, formatTacticLabel } from "./theme/wonderland";
 import type { HealthResponse, RunBundle, RunSummary } from "./types/events";
 
 /** How often a live dashboard re-reads `/api/runs` to find runs that started after it loaded. */
@@ -173,14 +174,27 @@ export function App() {
     [stream.visibleEvents, bundle]
   );
 
-  // Follow live active match
+  // Follow live active match only during active replay/live streaming, else start cleanly on Trial 1
   useEffect(() => {
-    if (followLive && aggregated.activeMatchId) {
+    if (
+      followLive &&
+      (stream.isReplaying || healthMode === "live") &&
+      aggregated.activeMatchId &&
+      aggregated.summary?.status === "running"
+    ) {
       setSelectedMatchId(aggregated.activeMatchId);
     } else if (!selectedMatchId && aggregated.matches.length > 0) {
       setSelectedMatchId(aggregated.matches[0].match.match_id);
     }
-  }, [followLive, aggregated.activeMatchId, aggregated.matches, selectedMatchId]);
+  }, [
+    followLive,
+    stream.isReplaying,
+    healthMode,
+    aggregated.activeMatchId,
+    aggregated.summary?.status,
+    aggregated.matches,
+    selectedMatchId,
+  ]);
 
   const activeSummary = aggregated.summary ?? bundle?.summary ?? null;
   const displayMatches = aggregated.matches;
@@ -197,8 +211,8 @@ export function App() {
   const handleOpenHeatmapCell = (cell: AggregatedCellView) => {
     setDrawer({
       isOpen: true,
-      title: `${cell.defense} vs ${cell.family}`,
-      subtitle: `${cell.scenarioLabel} · ${cell.leaks}/${cell.matches} leaks (${Math.round(cell.asr * 100)}% ASR)`,
+      title: `${formatDefenseName(cell.defense)} vs ${formatTacticLabel(cell.family)}`,
+      subtitle: `${cell.scenarioLabel} · ${cell.leaks} of ${cell.matches} breached`,
       matchIds: cell.match_ids,
     });
   };
@@ -257,20 +271,20 @@ export function App() {
       }
     >
       {loadError && (
-        <div className="mb-4 rounded-xl border border-rose-500/40 bg-rose-950/30 px-4 py-3 text-xs text-rose-200">
+        <div className="mb-4 rounded-2xl border border-[#f5b7c2] bg-[#fff1f2] px-4 py-3 text-xs font-medium text-[#a5152e]">
           {loadError}
         </div>
       )}
 
       {stream.error && (
-        <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-950/25 px-4 py-2.5 text-xs text-amber-200">
+        <div className="mb-4 rounded-2xl border border-[#f5c26b] bg-[#fef3c7] px-4 py-2.5 text-xs font-medium text-[#92400e]">
           {stream.error}
         </div>
       )}
 
       {loading && !bundle ? (
-        <div className="court-card rounded-xl p-10 text-center text-sm text-slate-400">
-          Summoning the Courtroom docket…
+        <div className="storybook-card rounded-3xl p-12 text-center font-editorial text-base text-[#5c4f41]">
+          Opening the Wonderland Court storybook…
         </div>
       ) : (
         <>
@@ -284,33 +298,76 @@ export function App() {
               }}
               followLive={followLive}
               onToggleFollowLive={() => setFollowLive((f) => !f)}
+              onNextChapter={() => setActiveTab("leaderboard")}
             />
           )}
 
           {activeTab === "leaderboard" && (
             <div className="space-y-6">
-              <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-                <div className="xl:col-span-7">
-                  <LeaderboardTable standings={displayStandings} />
-                </div>
-                <div className="xl:col-span-5">
-                  <DefenseTradeoffPlot standings={displayStandings} />
-                </div>
-              </div>
+              <LeaderboardTable standings={displayStandings} />
 
               <TechniqueHeatmap
                 heatmap={displayHeatmap}
                 onSelectCell={handleOpenHeatmapCell}
               />
+
+              {/* Linear Footer */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("feed")}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-[#dec8a4] bg-[#fffdf9] px-4 py-2.5 text-sm font-semibold text-[#4a3b2c] transition hover:border-[#2b5b84] hover:text-[#2b5b84]"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Back to Trials
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("caterpillar")}
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#2b5b84] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1e4568]"
+                >
+                  <span>Next: Caterpillar’s Fix</span>
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           )}
 
           {activeTab === "caterpillar" && (
-            <CaterpillarPanel
-              advice={bundle?.advice ?? null}
-              retrial={bundle?.retrial ?? null}
-              onInspectMatches={handleInspectMatches}
-            />
+            <div className="space-y-6">
+              <CaterpillarPanel
+                advice={bundle?.advice ?? null}
+                retrial={bundle?.retrial ?? null}
+                onInspectMatches={handleInspectMatches}
+              />
+
+              {/* Linear Footer */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("leaderboard")}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-[#dec8a4] bg-[#fffdf9] px-4 py-2.5 text-sm font-semibold text-[#4a3b2c] transition hover:border-[#2b5b84] hover:text-[#2b5b84]"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Back to Scoreboard
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (displayMatches[0]) {
+                      setSelectedMatchId(displayMatches[0].match.match_id);
+                    }
+                    setActiveTab("feed");
+                  }}
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#2b5b84] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1e4568]"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  <span>Start Over from Trial 1</span>
+                </button>
+              </div>
+            </div>
           )}
         </>
       )}
@@ -320,7 +377,9 @@ export function App() {
         title={drawer.title}
         subtitle={drawer.subtitle}
         matchIds={drawer.matchIds}
-        matches={displayMatches.length > 0 ? displayMatches : bundle?.matches ?? []}
+        matches={
+          displayMatches.length > 0 ? displayMatches : (bundle?.matches ?? [])
+        }
         onClose={() => setDrawer((d) => ({ ...d, isOpen: false }))}
       />
     </Layout>

@@ -1,6 +1,18 @@
-import { KeyRound, Shield, Target } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Layers,
+  Shield,
+  Sparkles,
+} from "lucide-react";
+import { useEffect, useState } from "react";
 import type { LiveMatchState } from "../state/streamAggregator";
-import { MatchSidebar } from "./MatchSidebar";
+import {
+  CHARACTERS,
+  formatDefenseName,
+  formatScenario,
+} from "../theme/wonderland";
+import { CharacterAvatar } from "./CharacterAvatar";
 import { TurnCard } from "./TurnCard";
 
 interface CourtroomFeedProps {
@@ -9,137 +21,310 @@ interface CourtroomFeedProps {
   onSelectMatch: (matchId: string) => void;
   followLive: boolean;
   onToggleFollowLive: () => void;
+  onNextChapter?: () => void;
 }
 
 export function CourtroomFeed({
   matches,
   selectedMatchId,
   onSelectMatch,
-  followLive,
-  onToggleFollowLive,
+  onNextChapter,
 }: CourtroomFeedProps) {
-  const activeMatch =
-    matches.find((m) => m.match.match_id === selectedMatchId) ?? matches[0] ?? null;
+  const activeIdx = Math.max(
+    0,
+    matches.findIndex((m) => m.match.match_id === selectedMatchId)
+  );
+  const activeMatch = matches[activeIdx] ?? matches[0] ?? null;
+
+  const [turnIdx, setTurnIdx] = useState<number>(0);
+  const [showAllTurns, setShowAllTurns] = useState<boolean>(false);
+
+  // Reset turn step to 0 whenever the user switches to a different case
+  useEffect(() => {
+    setTurnIdx(0);
+  }, [activeMatch?.match.match_id]);
+
+  // Clamp turnIdx if turns array shrinks (e.g., during replay seek)
+  const totalTurns = activeMatch?.liveTurns.length ?? 0;
+  const safeTurnIdx =
+    totalTurns > 0 ? Math.min(turnIdx, totalTurns - 1) : 0;
+
+  if (!activeMatch) {
+    return (
+      <div className="storybook-card flex min-h-[340px] flex-col items-center justify-center rounded-3xl p-8 text-center">
+        <CharacterAvatar character={CHARACTERS.rabbit} size="lg" showLabel={false} />
+        <h2 className="mt-4 font-editorial text-xl font-bold text-[#231f1a]">
+          The Courtroom is Preparing…
+        </h2>
+        <p className="mt-1.5 max-w-md text-sm text-[#6b5e4e]">
+          The White Rabbit is gathering the first trial. Characters and chat
+          bubbles will appear here as soon as the session begins.
+        </p>
+      </div>
+    );
+  }
+
+  const scenarioMeta = formatScenario(activeMatch.match.scenario);
+  const defenseLabel = formatDefenseName(activeMatch.match.defense);
+  const isFirstCase = activeIdx === 0;
+  const isLastCase = activeIdx >= matches.length - 1;
+  const isFirstTurn = safeTurnIdx === 0;
+  const isLastTurn = totalTurns === 0 || safeTurnIdx >= totalTurns - 1;
+
+  const goToCase = (index: number) => {
+    const target = matches[index];
+    if (target) {
+      onSelectMatch(target.match.match_id);
+      setTurnIdx(0);
+    }
+  };
+
+  const handlePrevClick = () => {
+    if (!showAllTurns && !isFirstTurn) {
+      setTurnIdx(safeTurnIdx - 1);
+    } else if (!isFirstCase) {
+      goToCase(activeIdx - 1);
+    }
+  };
+
+  const handleNextClick = () => {
+    if (!showAllTurns && !isLastTurn) {
+      setTurnIdx(safeTurnIdx + 1);
+    } else if (!isLastCase) {
+      goToCase(activeIdx + 1);
+    } else if (onNextChapter) {
+      onNextChapter();
+    }
+  };
+
+  const nextButtonLabel =
+    !showAllTurns && !isLastTurn
+      ? `Next Turn (${safeTurnIdx + 2} of ${totalTurns})`
+      : !isLastCase
+        ? `Next Trial (${activeIdx + 2} of ${matches.length})`
+        : "See the Scoreboard";
+
+  const prevButtonLabel =
+    !showAllTurns && !isFirstTurn ? "Previous Turn" : "Previous Trial";
+
+  const prevDisabled = (showAllTurns || isFirstTurn) && isFirstCase;
 
   return (
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
-      <div className="lg:col-span-4 xl:col-span-3">
-        <MatchSidebar
-          matches={matches}
-          selectedMatchId={activeMatch?.match.match_id ?? null}
-          onSelectMatch={onSelectMatch}
-          followLive={followLive}
-          onToggleFollowLive={onToggleFollowLive}
-        />
+    <div className="space-y-5">
+      {/* Compact Linear Case Picker Bar */}
+      <div className="storybook-card flex flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-3">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={isFirstCase}
+            onClick={() => goToCase(activeIdx - 1)}
+            aria-label="Previous trial"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-[#e4d2b4] bg-[#faf4e8] text-[#4a3b2c] transition hover:border-[#2b5b84] hover:text-[#2b5b84] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+
+          <span className="font-editorial text-sm font-bold text-[#231f1a]">
+            Trial {activeIdx + 1} of {matches.length}
+          </span>
+
+          <button
+            type="button"
+            disabled={isLastCase}
+            onClick={() => goToCase(activeIdx + 1)}
+            aria-label="Next trial"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-[#e4d2b4] bg-[#faf4e8] text-[#4a3b2c] transition hover:border-[#2b5b84] hover:text-[#2b5b84] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Clickable Case Dots */}
+        <div
+          className="flex flex-wrap items-center gap-1.5"
+          role="tablist"
+          aria-label="Select trial"
+        >
+          {matches.map((m, idx) => {
+            const selected = idx === activeIdx;
+            const statusSymbol =
+              m.status === "running" ? "…" : m.broken ? "♥" : "♣";
+            const statusColor =
+              m.status === "running"
+                ? "text-[#b45309]"
+                : m.broken
+                  ? "text-[#c81e3a]"
+                  : "text-[#047857]";
+
+            return (
+              <button
+                key={m.match.match_id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => goToCase(idx)}
+                title={`${formatScenario(m.match.scenario).title} · ${formatDefenseName(m.match.defense)}`}
+                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold transition ${
+                  selected
+                    ? "bg-[#2b5b84] text-white shadow-sm"
+                    : "border border-[#e4d2b4] bg-[#faf4e8] text-[#5c4f41] hover:border-[#cfb489]"
+                }`}
+              >
+                <span>{idx + 1}</span>
+                <span className={selected ? "text-white/90" : statusColor}>
+                  {statusSymbol}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      <section className="lg:col-span-8 xl:col-span-9">
-        {!activeMatch ? (
-          <div className="court-card flex min-h-[320px] flex-col items-center justify-center rounded-xl p-8 text-center">
-            <p className="font-editorial text-lg text-slate-300">
-              Awaiting the first match in the Courtroom…
-            </p>
-            <p className="mt-1 text-xs text-slate-500">
-              Turns, Drink Me payloads, and Queen verdicts will appear here in real time.
+      {/* Main Storybook Trial Stage */}
+      <section className="storybook-card overflow-hidden rounded-3xl">
+        {/* Case Header Banner */}
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#e9dcc6] bg-[#faf4e8]/70 px-5 py-4 sm:px-7">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-lg" aria-hidden="true">
+                {scenarioMeta.emoji}
+              </span>
+              <h2 className="font-editorial text-xl font-bold text-[#231f1a]">
+                {scenarioMeta.title}
+              </h2>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-[#b7cfe8] bg-[#eff6ff] px-3 py-0.5 text-xs font-semibold text-[#1e4568]">
+                <Shield className="h-3.5 w-3.5" />
+                {defenseLabel}
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-[#5c4f41]">
+              {activeMatch.stakes.objective}
             </p>
           </div>
-        ) : (
-          <div className="space-y-4">
-            {/* Match Dossier Header */}
-            <div className="court-card rounded-xl p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-sm font-bold text-amber-300">
-                      {activeMatch.match.match_id}
-                    </span>
-                    <span className="inline-flex items-center gap-1 rounded-md border border-[#23293a] bg-[#0b0d14] px-2 py-0.5 font-mono text-xs text-slate-200">
-                      <Shield className="h-3.5 w-3.5 text-emerald-400" />
-                      {activeMatch.match.defense}
-                    </span>
-                    <span className="rounded-md border border-[#23293a] bg-[#0b0d14] px-2 py-0.5 font-mono text-xs text-slate-300">
-                      {activeMatch.match.scenario}
-                    </span>
-                    <span className="inline-flex items-center gap-1 font-mono text-xs text-slate-400">
-                      <Target className="h-3.5 w-3.5" />
-                      {activeMatch.match.target}
-                    </span>
-                  </div>
 
-                  <p className="mt-2 text-sm text-slate-300">
-                    <span className="font-semibold text-slate-200">
-                      Objective:{" "}
-                    </span>
-                    {activeMatch.stakes.objective}
-                  </p>
+          <span
+            className={`rounded-xl px-3 py-1.5 font-editorial text-xs font-bold tracking-wide ${
+              activeMatch.status === "running"
+                ? "border border-[#f5c26b] bg-[#fef3c7] text-[#92400e]"
+                : activeMatch.broken
+                  ? "court-stamp-leak bg-[#ffe2e7] text-[#a5152e]"
+                  : "court-stamp-held bg-[#dcfce7] text-[#065f46]"
+            }`}
+          >
+            {activeMatch.status === "running"
+              ? "In Session"
+              : activeMatch.broken
+                ? "♥ Breached"
+                : "♣ Alice Held"}
+          </span>
+        </div>
+
+        {/* Character Conversation Area */}
+        <div className="p-5 sm:p-7">
+          {totalTurns === 0 ? (
+            <div className="flex flex-col items-center justify-center py-10 text-center">
+              <CharacterAvatar
+                character={CHARACTERS.cheshire}
+                size="md"
+                showLabel={false}
+              />
+              <p className="mt-3 font-editorial text-base font-bold text-[#3a3026]">
+                Awaiting Turn 1…
+              </p>
+              <p className="mt-1 text-xs text-[#6b5e4e]">
+                The Cheshire Cat is preparing an opening trick.
+              </p>
+            </div>
+          ) : showAllTurns ? (
+            <div className="space-y-8">
+              {activeMatch.liveTurns.map((slot, idx) => (
+                <div
+                  key={slot.index}
+                  className={
+                    idx > 0 ? "border-t-2 border-dashed border-[#e9dcc6] pt-8" : ""
+                  }
+                >
+                  <TurnCard
+                    slot={slot}
+                    prevFamily={
+                      idx > 0
+                        ? activeMatch.liveTurns[idx - 1].attack?.family ?? null
+                        : null
+                    }
+                    canary={activeMatch.stakes.canary}
+                  />
                 </div>
+              ))}
+            </div>
+          ) : (
+            <TurnCard
+              key={`${activeMatch.match.match_id}-${activeMatch.liveTurns[safeTurnIdx].index}`}
+              slot={activeMatch.liveTurns[safeTurnIdx]}
+              prevFamily={
+                safeTurnIdx > 0
+                  ? activeMatch.liveTurns[safeTurnIdx - 1].attack?.family ?? null
+                  : null
+              }
+              canary={activeMatch.stakes.canary}
+            />
+          )}
+        </div>
 
-                <div className="flex flex-col items-end gap-1.5">
-                  <span
-                    className={`rounded px-2.5 py-1 font-editorial text-xs font-bold tracking-wider ${
-                      activeMatch.status === "running"
-                        ? "border border-amber-500/40 bg-amber-500/15 text-amber-300"
-                        : activeMatch.broken
-                          ? "court-stamp-leak bg-rose-600/20 text-rose-300"
-                          : "court-stamp-held bg-emerald-600/20 text-emerald-300"
+        {/* Linear Bottom Stepper Footer */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#e9dcc6] bg-[#faf4e8]/80 px-5 py-4 sm:px-7">
+          <button
+            type="button"
+            disabled={prevDisabled}
+            onClick={handlePrevClick}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-[#dec8a4] bg-[#fffdf9] px-4 py-2 text-sm font-semibold text-[#4a3b2c] transition hover:border-[#2b5b84] hover:text-[#2b5b84] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            <span>{prevButtonLabel}</span>
+          </button>
+
+          {/* Center Turn Stepper + Show All Toggle */}
+          <div className="flex flex-wrap items-center gap-2">
+            {totalTurns > 1 && !showAllTurns && (
+              <div className="flex items-center gap-1">
+                {activeMatch.liveTurns.map((slot, idx) => (
+                  <button
+                    key={slot.index}
+                    type="button"
+                    onClick={() => setTurnIdx(idx)}
+                    className={`rounded-full px-2.5 py-1 text-xs font-semibold transition ${
+                      idx === safeTurnIdx
+                        ? "bg-[#2b5b84] text-white"
+                        : "bg-[#efe2cc] text-[#5c4f41] hover:bg-[#e4d2b4]"
                     }`}
                   >
-                    {activeMatch.status === "running"
-                      ? "IN TRIAL"
-                      : activeMatch.broken
-                        ? `♥︎ OFF WITH HER HEAD (T${activeMatch.broken_on_turn ?? "?"})`
-                        : "♣︎ HELD"}
-                  </span>
-
-                  <div className="inline-flex items-center gap-1.5 font-mono text-[11px] text-slate-400">
-                    <KeyRound className="h-3 w-3 text-amber-400" />
-                    <span>Canary: {activeMatch.stakes.canary}</span>
-                    <span>·</span>
-                    <span>Seed #{activeMatch.match.seed}</span>
-                  </div>
-                </div>
+                    Turn {slot.index}
+                  </button>
+                ))}
               </div>
+            )}
 
-              {activeMatch.stakes.tool_rules.length > 0 && (
-                <div className="mt-3 flex flex-wrap gap-2 border-t border-[#23293a] pt-2.5">
-                  {activeMatch.stakes.tool_rules.map((rule, i) => (
-                    <span
-                      key={i}
-                      className="rounded border border-[#23293a] bg-[#0b0d14] px-2 py-0.5 font-mono text-[11px] text-slate-400"
-                    >
-                      Rule: <span className="text-slate-200">{rule.tool}</span>{" "}
-                      — {rule.description}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Turns Timeline */}
-            <div className="space-y-4">
-              {activeMatch.liveTurns.length === 0 ? (
-                <div className="court-card rounded-xl p-6 text-center text-xs text-slate-400">
-                  Match initialized — awaiting Turn 1 from Cheshire Cat…
-                </div>
-              ) : (
-                activeMatch.liveTurns.map((slot, idx) => {
-                  const prevFamily =
-                    idx > 0
-                      ? activeMatch.liveTurns[idx - 1].attack?.family ?? null
-                      : null;
-                  return (
-                    <TurnCard
-                      key={slot.index}
-                      slot={slot}
-                      prevFamily={prevFamily}
-                      canary={activeMatch.stakes.canary}
-                    />
-                  );
-                })
-              )}
-            </div>
+            {totalTurns > 1 && (
+              <button
+                type="button"
+                onClick={() => setShowAllTurns((v) => !v)}
+                className="inline-flex items-center gap-1 rounded-full border border-[#dec8a4] bg-[#fffdf9] px-2.5 py-1 text-xs font-medium text-[#6b5e4e] transition hover:border-[#b49464] hover:text-[#231f1a]"
+              >
+                <Layers className="h-3 w-3" />
+                {showAllTurns ? "One turn at a time" : "Show all turns"}
+              </button>
+            )}
           </div>
-        )}
+
+          <button
+            type="button"
+            onClick={handleNextClick}
+            className="inline-flex items-center gap-2 rounded-xl bg-[#2b5b84] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1e4568]"
+          >
+            {isLastTurn && isLastCase && <Sparkles className="h-4 w-4" />}
+            <span>{nextButtonLabel}</span>
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
       </section>
     </div>
   );

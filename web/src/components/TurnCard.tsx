@@ -1,13 +1,16 @@
-import {
-  ArrowRightLeft,
-  Cat,
-  Clock,
-  ShieldCheck,
-  Sparkles,
-  Wrench,
-} from "lucide-react";
+import { ArrowRightLeft, ShieldCheck, Sparkles, Wrench } from "lucide-react";
 import type { LiveTurnSlot } from "../state/streamAggregator";
+import {
+  buildAliceThought,
+  buildAttackerThought,
+  CHARACTERS,
+  formatDefenseName,
+  formatMutatorLabel,
+  formatTacticLabel,
+  pickAttackerCharacter,
+} from "../theme/wonderland";
 import type { ToolCall } from "../types/events";
+import { CharacterAvatar } from "./CharacterAvatar";
 import { DrinkMePreview } from "./DrinkMePreview";
 import { VerdictBanner } from "./VerdictBanner";
 
@@ -33,124 +36,178 @@ export function TurnCard({ slot, prevFamily, canary }: TurnCardProps) {
     attack && prevFamily && attack.family !== prevFamily
   );
 
+  const attacker = pickAttackerCharacter(attack);
+  const attackerThought = attack
+    ? buildAttackerThought(attack, isTacticSwitch)
+    : "Preparing the next trick…";
+  const aliceThought = buildAliceThought(reply, verdict);
+
+  const canaryLeaked = Boolean(
+    canary &&
+      reply &&
+      reply.content.replace(/\s+/g, "").includes(canary.replace(/\s+/g, ""))
+  );
+
   return (
     <article
-      className="court-card rounded-xl p-4 shadow-md"
+      className="animate-page-in space-y-5"
       data-testid={`turn-card-${slot.index}`}
     >
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-[#23293a] pb-2.5">
+      {/* Subtle Turn Banner */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e9dcc6] pb-3">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded bg-[#191f2e] px-2 py-0.5 font-mono text-xs font-semibold text-slate-200">
+          <span className="rounded-full bg-[#f2e7d3] px-3 py-1 font-editorial text-xs font-bold text-[#4a3b2c]">
             Turn {slot.index}
           </span>
 
           {attack && (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-purple-500/35 bg-purple-500/10 px-2.5 py-0.5 text-xs font-medium text-purple-300">
-              <Cat className="h-3.5 w-3.5" />
-              <span className="font-mono">{attack.family}</span>
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ${attacker.badgeClass}`}
+            >
+              <span>{attacker.suit}</span>
+              <span>{formatTacticLabel(attack.family)}</span>
             </span>
           )}
 
-          {isTacticSwitch && attack && (
-            <span
-              className="inline-flex items-center gap-1 rounded-full border border-amber-500/50 bg-amber-500/15 px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider text-amber-300"
-              title={`Switched from ${prevFamily} to ${attack.family}`}
-            >
+          {isTacticSwitch && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-[#f5c26b] bg-[#fef3c7] px-2.5 py-0.5 text-[11px] font-bold text-[#92400e]">
               <ArrowRightLeft className="h-3 w-3" />
-              TACTIC SWITCH
+              New Tactic
             </span>
           )}
 
           {attack?.mutators.map((mut) => (
             <span
               key={mut}
-              className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-[#1c1917] px-2 py-0.5 font-mono text-[11px] text-amber-200"
-              title="Mad Hatter Mutator"
+              className="inline-flex items-center gap-1 rounded-full border border-[#a7f3d0] bg-[#ecfdf5] px-2.5 py-0.5 text-[11px] font-semibold text-[#065f46]"
             >
-              <Sparkles className="h-2.5 w-2.5 text-amber-400" />
-              {mut}
+              <Sparkles className="h-3 w-3" />
+              {formatMutatorLabel(mut)}
             </span>
           ))}
         </div>
 
-        {reply && (
-          <div className="flex items-center gap-2 text-xs text-slate-400">
-            {reply.blocked_by && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-0.5 font-medium text-emerald-300">
-                <ShieldCheck className="h-3.5 w-3.5" />
-                Blocked by {reply.blocked_by}
-              </span>
-            )}
-            <span className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-400">
-              <Clock className="h-3 w-3" />
-              {reply.latency_ms}ms
-            </span>
-          </div>
+        {reply?.blocked_by && (
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-[#9ad8be] bg-[#ecfdf5] px-3 py-1 text-xs font-semibold text-[#065f46]">
+            <ShieldCheck className="h-3.5 w-3.5" />
+            Blocked by {formatDefenseName(reply.blocked_by)}
+          </span>
         )}
       </div>
 
-      {/* Cheshire Cat Attack */}
+      {/* 1. Attacker Row (Left Character + Thought Bubble + Speech Bubble) */}
       {attack && (
-        <div className="rounded-lg border border-[#23293a] bg-[#0b0d14] p-3">
-          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-purple-300/90">
-            Cheshire Cat · Attack
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:gap-5">
+          <div className="md:w-28 md:pt-1">
+            <CharacterAvatar character={attacker} size="md" />
           </div>
-          <p className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-slate-200">
-            {attack.message}
-          </p>
-          {attack.document && <DrinkMePreview document={attack.document} />}
+
+          <div className="flex-1 space-y-2.5">
+            {/* Thought Bubble */}
+            <div className="flex items-start gap-2">
+              <div
+                className={`thought-bubble inline-flex items-center gap-2 px-3.5 py-2 text-xs italic text-[#5c4f41] ${attacker.thoughtBorderClass}`}
+                data-testid="attacker-thought"
+              >
+                <span aria-hidden="true">💭</span>
+                <span>{attackerThought}</span>
+              </div>
+            </div>
+
+            {/* Speech / Chat Bubble */}
+            <div
+              className={`speech-bubble-left rounded-2xl border-2 p-4 shadow-bubble ${attacker.bubbleClass}`}
+            >
+              <div
+                className={`mb-1.5 text-xs font-bold ${attacker.accentTextClass}`}
+              >
+                {attacker.name} says:
+              </div>
+              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                {attack.message}
+              </p>
+              {attack.document && <DrinkMePreview document={attack.document} />}
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Alice Reply or Thinking State */}
-      <div className="mt-3 rounded-lg border border-[#23293a] bg-[#0f131d] p-3">
-        <div className="mb-1 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-sky-300/90">
-          <span>Alice · Target Reply</span>
-          {canary &&
-            reply &&
-            reply.content.replace(/\s+/g, "").includes(canary.replace(/\s+/g, "")) && (
-              <span className="rounded bg-rose-500/20 px-1.5 py-0.5 font-mono text-[10px] text-rose-300">
-                Canary Exposed
+      {/* 2. Alice Row (Thought Bubble + Speech Bubble + Right Character) */}
+      <div className="flex flex-col-reverse gap-3 md:flex-row md:items-start md:gap-5">
+        <div className="flex-1 space-y-2.5">
+          {/* Alice's Thought Bubble */}
+          <div className="flex justify-start md:justify-end">
+            <div
+              className={`thought-bubble inline-flex items-center gap-2 px-3.5 py-2 text-xs italic text-[#42556b] ${CHARACTERS.alice.thoughtBorderClass}`}
+              data-testid="alice-thought"
+            >
+              <span aria-hidden="true">💭</span>
+              <span>{aliceThought}</span>
+            </div>
+          </div>
+
+          {/* Alice's Speech / Chat Bubble */}
+          <div
+            className={`speech-bubble-right rounded-2xl border-2 p-4 shadow-bubble ${CHARACTERS.alice.bubbleClass}`}
+          >
+            <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-bold text-[#1e4568]">
+                Alice replies:
               </span>
+              {canaryLeaked && (
+                <span className="rounded-full border border-[#f5b7c2] bg-[#ffe4e8] px-2 py-0.5 text-[11px] font-bold text-[#a5152e]">
+                  Secret Revealed!
+                </span>
+              )}
+            </div>
+
+            {!reply ? (
+              <div className="flex items-center gap-2 py-2 text-sm italic text-[#5c6f82]">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-[#2b5b84]" />
+                <span>Alice is thinking...</span>
+              </div>
+            ) : (
+              <>
+                <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                  {reply.content}
+                </p>
+
+                {reply.tool_calls.length > 0 && (
+                  <div className="mt-3 space-y-1.5">
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-[#a5152e]">
+                      Actions Alice Took:
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {reply.tool_calls.map((tc) => (
+                        <div
+                          key={tc.id}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-[#f5b7c2] bg-[#fff1f2] px-3 py-1.5 font-mono text-xs font-semibold text-[#881326]"
+                          data-testid="tool-call-pill"
+                        >
+                          <Wrench className="h-3.5 w-3.5 text-[#c81e3a]" />
+                          <span>{formatToolCallSignature(tc)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
+          </div>
         </div>
 
-        {!reply ? (
-          <div className="flex items-center gap-2 py-2 text-xs italic text-slate-400">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-amber-400" />
-            <span>Alice is thinking...</span>
-          </div>
-        ) : (
-          <>
-            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-100">
-              {reply.content}
-            </p>
-
-            {reply.tool_calls.length > 0 && (
-              <div className="mt-2.5 flex flex-wrap gap-2">
-                {reply.tool_calls.map((tc) => (
-                  <div
-                    key={tc.id}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-rose-500/50 bg-rose-950/40 px-2.5 py-1 font-mono text-xs text-rose-200"
-                    data-testid="tool-call-pill"
-                  >
-                    <Wrench className="h-3.5 w-3.5 text-rose-400" />
-                    <span>{formatToolCallSignature(tc)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
+        <div className="md:w-28 md:pt-1">
+          <CharacterAvatar character={CHARACTERS.alice} size="md" />
+        </div>
       </div>
 
-      {/* Queen's Verdict */}
+      {/* 3. Queen of Hearts Verdict */}
       {verdict ? (
         <VerdictBanner verdict={verdict} />
       ) : reply ? (
-        <div className="mt-3 flex items-center gap-2 rounded-lg border border-[#23293a] bg-[#0b0d14] px-3 py-2 text-xs italic text-slate-400">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-rose-400" />
-          <span>Queen of Hearts is ruling...</span>
+        <div className="mt-4 flex items-center gap-3 rounded-2xl border border-[#e4d2b4] bg-[#faf4e8] px-4 py-3 text-sm italic text-[#6b5e4e]">
+          <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-[#c81e3a]" />
+          <span>The Queen of Hearts is deciding the verdict…</span>
         </div>
       ) : null}
     </article>

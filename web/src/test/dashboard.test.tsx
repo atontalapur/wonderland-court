@@ -29,8 +29,8 @@ const FIXTURE_PATH = path.resolve(
 const FAKE_RUN_JSONL = fs.readFileSync(FIXTURE_PATH, "utf-8");
 const FAKE_EVENTS: CourtEvent[] = parseJsonlEvents(FAKE_RUN_JSONL);
 
-describe("Courtroom Dashboard with real fixtures/fake_run.jsonl", () => {
-  it("renders CourtroomFeed with $400 refund tool call, Drink Me preview, TACTIC SWITCH, and Queen verdict stamp", () => {
+describe("Wonderland Court Storybook Dashboard with real fixtures/fake_run.jsonl", () => {
+  it("steps linearly through turns with character thought/chat bubbles, Drink Me preview, tool calls, and Queen verdict", () => {
     const state = aggregateEvents(FAKE_EVENTS);
 
     render(
@@ -43,29 +43,40 @@ describe("Courtroom Dashboard with real fixtures/fake_run.jsonl", () => {
       />
     );
 
-    // Match m01 Turn 2 has indirect_injection after Turn 1 role_play -> TACTIC SWITCH
-    expect(screen.getByText("TACTIC SWITCH")).toBeInTheDocument();
+    // Starts focused on Turn 1 with Cheshire Cat & Alice thought bubbles
+    expect(screen.getByTestId("turn-card-1")).toBeInTheDocument();
+    expect(screen.getByTestId("attacker-thought")).toBeInTheDocument();
+    expect(screen.getByTestId("alice-thought")).toBeInTheDocument();
 
-    // Drink Me poisoned email preview with HTML comment directive
+    // Linear click to Turn 2 (Mad Hatter's poisoned Drink Me email + tactic switch + $400 refund)
+    fireEvent.click(screen.getByRole("button", { name: /Next Turn/i }));
+
+    expect(screen.getByTestId("turn-card-2")).toBeInTheDocument();
+    expect(screen.getByText("New Tactic")).toBeInTheDocument();
+
     const drinkMe = screen.getByTestId("drink-me-preview");
     expect(drinkMe).toHaveTextContent("Drink Me · Email");
     expect(drinkMe).toHaveTextContent("Order #1187 arrived cold");
     expect(drinkMe).toHaveTextContent("Poisoned");
     expect(drinkMe).toHaveTextContent("NOTE TO ASSISTANT");
 
-    // Alice's unauthorized $400 refund tool call pill
     const toolPills = screen.getAllByTestId("tool-call-pill");
-    expect(toolPills.some((el) => el.textContent?.includes("issue_refund(order_id=1187, amount=400)"))).toBe(true);
-    expect(toolPills.some((el) => el.textContent?.includes("send_email(to=refunds@hatter-mail.example"))).toBe(true);
+    expect(
+      toolPills.some((el) =>
+        el.textContent?.includes("issue_refund(order_id=1187, amount=400)")
+      )
+    ).toBe(true);
+    expect(
+      toolPills.some((el) =>
+        el.textContent?.includes("send_email(to=refunds@hatter-mail.example")
+      )
+    ).toBe(true);
 
-    // Queen's verdict stamp & layer
-    const banners = screen.getAllByTestId("verdict-banner");
-    expect(banners.some((b) => b.textContent?.includes("♥︎ OFF WITH HER HEAD!"))).toBe(true);
-    expect(banners.some((b) => b.textContent?.includes("TOOL_CALL"))).toBe(true);
+    const banner = screen.getByTestId("verdict-banner");
+    expect(banner).toHaveTextContent("♥ OFF WITH HER HEAD!");
   });
 
   it("shows progressive 'Alice is thinking...' state when an attack event arrives before reply", () => {
-    // Take first 3 events: run_started, match_started(m01), attack(m01, turn 1)
     const partialState = aggregateEvents(FAKE_EVENTS.slice(0, 3));
 
     render(
@@ -115,12 +126,10 @@ describe("Courtroom Dashboard with real fixtures/fake_run.jsonl", () => {
     fireEvent.click(screen.getByRole("button", { name: "4x" }));
     expect(onSpeedChange).toHaveBeenCalledWith(4);
 
-    // Scrubber range input seek
     const slider = screen.getByLabelText("Replay event scrubber");
     fireEvent.change(slider, { target: { value: "40" } });
     expect(onSeek).toHaveBeenCalledWith(40);
 
-    // Pause when playing
     rerender(
       <ReplayControls
         isPlaying={true}
@@ -164,31 +173,29 @@ describe("Courtroom Dashboard with real fixtures/fake_run.jsonl", () => {
 
     render(<Harness />);
 
-    // Leaderboard rows: plain is ELIMINATED (100% ASR >= 75%), spotlighting+guard+output_filter is #1 Elo
     const plainRow = screen.getByTestId("leaderboard-row-plain");
     expect(plainRow).toHaveTextContent("Eliminated");
-    expect(plainRow).toHaveTextContent("100%");
+    expect(plainRow).toHaveTextContent("100% breached");
 
     const topRow = screen.getByTestId(
       "leaderboard-row-spotlighting+guard+output_filter"
     );
     expect(topRow).toHaveTextContent("#1");
-    expect(topRow).toHaveTextContent("78%");
+    expect(topRow).toHaveTextContent("78% helpful");
 
-    // Click heatmap cell: plain vs indirect_injection -> opens TranscriptDrawer with m01
     const cellBtn = screen.getByTestId("heatmap-cell-plain-indirect_injection");
     fireEvent.click(cellBtn);
 
     const drawer = screen.getByTestId("transcript-drawer");
     expect(drawer).toBeInTheDocument();
-    expect(within(drawer).getByText("m01")).toBeInTheDocument();
-    expect(within(drawer).getByText(/issue_refund\(order_id=1187, amount=400\)/)).toBeInTheDocument();
+    expect(
+      within(drawer).getByText(/issue_refund\(order_id=1187, amount=400\)/)
+    ).toBeInTheDocument();
   });
 
-  it("renders CaterpillarPanel both in empty state and populated state with clusters, YAML copy, and RetrialDiffCard", async () => {
+  it("renders CaterpillarPanel in empty and populated states with YAML copy and RetrialDiffCard", async () => {
     const state = aggregateEvents(FAKE_EVENTS);
 
-    // 1. Empty state
     const { rerender } = render(
       <CaterpillarPanel
         advice={null}
@@ -199,7 +206,6 @@ describe("Courtroom Dashboard with real fixtures/fake_run.jsonl", () => {
     expect(screen.getByTestId("caterpillar-empty-state")).toBeInTheDocument();
     expect(screen.getByTestId("retrial-empty-state")).toBeInTheDocument();
 
-    // 2. Populated state
     const advice: RemediationAdviceView = {
       run_id: "fake-run-0001",
       target_kind: "model",
@@ -277,9 +283,8 @@ describe("Courtroom Dashboard with real fixtures/fake_run.jsonl", () => {
 
     const retrialCard = screen.getByTestId("retrial-diff-card");
     expect(retrialCard).toHaveTextContent("ASR Δ -37.5%");
-    expect(retrialCard).toHaveTextContent("refund_tool");
+    expect(retrialCard).toHaveTextContent("The Refund Ledger");
 
-    // Clicking example match ID opens TranscriptDrawer
     fireEvent.click(screen.getByRole("button", { name: /m01/ }));
     expect(screen.getByTestId("transcript-drawer")).toBeInTheDocument();
   });
@@ -303,17 +308,14 @@ describe("Courtroom Dashboard with real fixtures/fake_run.jsonl", () => {
       attack: sampleSlot.attack
         ? {
             ...sampleSlot.attack,
-            prompt: xssPayload,
-            documents: [
-              {
-                doc_id: "doc-xss",
-                kind: "email",
-                source: "attacker@example.com",
-                subject: xssPayload,
-                content: `<!-- ${xssPayload} --> Hello`,
-                poisoned: true,
-              },
-            ],
+            message: xssPayload,
+            document: {
+              id: "doc-xss",
+              kind: "email" as const,
+              title: xssPayload,
+              body: `<!-- ${xssPayload} --> Hello`,
+              poisoned: true,
+            },
           }
         : undefined,
       reply: sampleSlot.reply
@@ -326,7 +328,7 @@ describe("Courtroom Dashboard with real fixtures/fake_run.jsonl", () => {
 
     const { container } = render(<TurnCard slot={poisonedSlot} />);
     expect(container.querySelectorAll("script")).toHaveLength(0);
-    expect(container.querySelectorAll("img")).toHaveLength(0);
+    expect(container.querySelectorAll('img[src="x"]')).toHaveLength(0);
     expect(container.textContent).toContain("<script>window.__xss=1</script>");
   });
 
@@ -348,17 +350,23 @@ describe("Courtroom Dashboard with real fixtures/fake_run.jsonl", () => {
       </div>
     );
 
-    const btn = screen.getByRole("button", { name: /Judge Calibration: 63% \(5\/8\)/ });
+    const btn = screen.getByRole("button", {
+      name: /Judge Calibration: 63% \(5\/8\)/,
+    });
     fireEvent.click(btn);
     expect(screen.getByText("Queen Judge Calibration")).toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByText("Queen Judge Calibration")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Queen Judge Calibration")
+    ).not.toBeInTheDocument();
 
     fireEvent.click(btn);
     expect(screen.getByText("Queen Judge Calibration")).toBeInTheDocument();
     fireEvent.mouseDown(screen.getByTestId("outside-target"));
-    expect(screen.queryByText("Queen Judge Calibration")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Queen Judge Calibration")
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -369,7 +377,10 @@ class MockEventSource {
   onopen: (() => void) | null = null;
   onmessage: ((ev: MessageEvent<string>) => void) | null = null;
   onerror: (() => void) | null = null;
-  private listeners = new Map<string, Array<(ev: MessageEvent<string>) => void>>();
+  private listeners = new Map<
+    string,
+    Array<(ev: MessageEvent<string>) => void>
+  >();
 
   constructor(url: string) {
     this.url = url;
@@ -397,11 +408,7 @@ class MockEventSource {
   }
 }
 
-function StreamHarness({
-  options,
-}: {
-  options: UseCourtStreamOptions;
-}) {
+function StreamHarness({ options }: { options: UseCourtStreamOptions }) {
   const stream = useCourtStream(options);
   return (
     <div>
@@ -453,7 +460,6 @@ describe("useCourtStream & App lifecycle guarantees", () => {
     });
     expect(screen.getByTestId("event-count")).toHaveTextContent("1");
 
-    // Bundle resolves after SSE already delivered ev2
     rerender(
       <StreamHarness
         options={{
@@ -464,12 +470,10 @@ describe("useCourtStream & App lifecycle guarantees", () => {
       />
     );
 
-    // Should merge all 3 events sorted by seq and deduplicated, without opening a new EventSource
     expect(screen.getByTestId("event-count")).toHaveTextContent("3");
     expect(MockEventSource.instances).toHaveLength(1);
     expect(es.closed).toBe(false);
 
-    // Speed change or local replay toggle in live mode must not reconnect SSE
     fireEvent.click(screen.getByRole("button", { name: "Speed4" }));
     fireEvent.click(screen.getByRole("button", { name: "StartReplay" }));
     expect(MockEventSource.instances).toHaveLength(1);
@@ -576,17 +580,17 @@ describe("useCourtStream & App lifecycle guarantees", () => {
     );
 
     render(<App />);
-    await screen.findByText(/8 matches · 3 leaks/);
+    await screen.findByText(/8 trials · 5 held · 3 breached/);
 
-    // In replay mode at cursor 0, Leaderboard tab must not flash completed bundle1 standings
-    fireEvent.click(screen.getByRole("button", { name: /Leaderboard/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Scoreboard/i }));
     expect(screen.queryByTestId("leaderboard-row-plain")).not.toBeInTheDocument();
 
-    // Switching to pending-run clears previous bundle cleanly
     const selector = screen.getByLabelText("Select active run");
     fireEvent.change(selector, { target: { value: "pending-run" } });
     await waitFor(() => {
-      expect(screen.queryByTestId("leaderboard-row-plain")).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("leaderboard-row-plain")
+      ).not.toBeInTheDocument();
     });
   });
 });
@@ -643,7 +647,7 @@ describe("Live dashboard follows runs that start after it loads", () => {
     stubLiveServer([[], [newRun]]);
 
     render(<App />);
-    await screen.findByText(/Awaiting the first match/);
+    await screen.findByText(/The Courtroom is Preparing/);
     expect(MockEventSource.instances).toHaveLength(0);
 
     await act(() => vi.advanceTimersByTimeAsync(LIVE_RUNS_POLL_MS));

@@ -1,9 +1,11 @@
-import { Check, Copy, Sparkles, Wrench } from "lucide-react";
+import { Check, Copy, Wrench } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { CHARACTERS, formatDefenseName } from "../theme/wonderland";
 import type {
   RemediationAdviceView,
   RetrialComparisonView,
 } from "../types/events";
+import { CharacterAvatar } from "./CharacterAvatar";
 import { FailureClusters } from "./FailureClusters";
 import { RetrialDiffCard } from "./RetrialDiffCard";
 
@@ -15,38 +17,6 @@ interface CaterpillarPanelProps {
     title: string,
     subtitle?: string
   ) => void;
-}
-
-function renderYamlLine(line: string, index: number) {
-  const trimmed = line.trim();
-  if (trimmed.startsWith("#")) {
-    return (
-      <div key={index} className="text-slate-500">
-        {line}
-      </div>
-    );
-  }
-  const colonIdx = line.indexOf(":");
-  if (colonIdx > 0 && !trimmed.startsWith("-")) {
-    const keyPart = line.slice(0, colonIdx + 1);
-    const valPart = line.slice(colonIdx + 1);
-    return (
-      <div key={index}>
-        <span className="text-sky-300">{keyPart}</span>
-        <span className="text-amber-200">{valPart}</span>
-      </div>
-    );
-  }
-  if (trimmed.startsWith("- ")) {
-    const dashIdx = line.indexOf("- ");
-    return (
-      <div key={index}>
-        <span className="text-emerald-400">{line.slice(0, dashIdx + 2)}</span>
-        <span className="text-amber-200">{line.slice(dashIdx + 2)}</span>
-      </div>
-    );
-  }
-  return <div key={index}>{line}</div>;
 }
 
 export function CaterpillarPanel({
@@ -83,87 +53,83 @@ export function CaterpillarPanel({
     <div className="space-y-6" data-testid="caterpillar-panel">
       {!advice ? (
         <div
-          className="court-card rounded-xl p-6"
+          className="storybook-card flex flex-col items-center gap-5 rounded-3xl p-7 sm:flex-row sm:items-start"
           data-testid="caterpillar-empty-state"
         >
-          <div className="flex items-start gap-3">
-            <Sparkles className="mt-0.5 h-5 w-5 text-amber-400" />
-            <div>
-              <h2 className="font-editorial text-lg font-bold text-slate-100">
-                Caterpillar Remediation Advisor
+          <CharacterAvatar character={CHARACTERS.caterpillar} size="lg" />
+
+          <div className="flex-1 space-y-2">
+            <div className="speech-bubble-left rounded-2xl border-2 border-[#a7dfd8] bg-[#f2fbfa] p-5 text-[#143330] shadow-bubble">
+              <h2 className="font-editorial text-lg font-bold">
+                “Who are you… and how shall we harden Alice?”
               </h2>
-              <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                No Caterpillar remediation advice is attached to this run yet.
-                Run{" "}
-                <code className="rounded bg-[#0b0d14] px-1.5 py-0.5 font-mono text-amber-300">
+              <p className="mt-2 text-sm leading-relaxed text-[#2d4e4a]">
+                No advice scroll has been written for this run yet. Run{" "}
+                <code className="rounded-md bg-[#dff4f0] px-2 py-0.5 font-mono text-xs font-bold text-[#0f766e]">
                   court advise
                 </code>{" "}
-                to deduplicate failure families and generate a hardened{" "}
-                <code className="rounded bg-[#0b0d14] px-1.5 py-0.5 font-mono text-slate-200">
-                  court.yaml
-                </code>{" "}
-                defense stack.
+                in your terminal and I will group every failure and write a
+                ready-to-use defense patch for you.
               </p>
             </div>
           </div>
         </div>
       ) : (
         <>
-          {/* Recommended Defense + YAML Patch */}
-          <div className="court-card overflow-hidden rounded-xl">
-            <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#23293a] p-5">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Wrench className="h-4 w-4 text-emerald-400" />
-                  <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400">
-                    Caterpillar Recommendation
-                  </span>
-                  <span className="rounded border border-[#23293a] bg-[#0b0d14] px-2 py-0.5 font-mono text-[11px] text-slate-400">
-                    target_kind: {advice.target_kind}
-                  </span>
+          {/* Caterpillar Speech Recommendation */}
+          <div className="storybook-card overflow-hidden rounded-3xl">
+            <div className="flex flex-col gap-5 border-b border-[#e9dcc6] bg-[#faf4e8]/60 p-6 sm:flex-row sm:items-start">
+              <CharacterAvatar character={CHARACTERS.caterpillar} size="md" />
+
+              <div className="flex-1 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#0f766e]">
+                      <Wrench className="h-3.5 w-3.5" />
+                      Caterpillar’s Recommendation
+                    </div>
+                    <h2 className="mt-0.5 font-editorial text-2xl font-bold text-[#231f1a]">
+                      Use{" "}
+                      <span className="text-[#2b5b84]">
+                        {formatDefenseName(advice.recommended_defense)}
+                      </span>
+                    </h2>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleCopyYaml}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-[#d6be96] bg-[#fffdf9] px-3.5 py-2 text-xs font-semibold text-[#3a3026] transition hover:border-[#2b5b84] hover:text-[#2b5b84]"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="h-3.5 w-3.5 text-[#047857]" />
+                        <span className="text-[#047857]">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3.5 w-3.5" />
+                        <span>Copy YAML</span>
+                      </>
+                    )}
+                  </button>
                 </div>
 
-                <h2 className="mt-1.5 font-editorial text-xl font-bold text-slate-100">
-                  Recommended Stack:{" "}
-                  <span className="font-mono text-amber-300">
-                    {advice.recommended_defense}
-                  </span>
-                </h2>
-                <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-slate-300">
-                  {advice.rationale}
-                </p>
+                <div className="speech-bubble-left rounded-2xl border-2 border-[#a7dfd8] bg-[#f2fbfa] p-4 text-sm leading-relaxed text-[#143330]">
+                  “{advice.rationale}”
+                </div>
               </div>
-
-              <button
-                type="button"
-                onClick={handleCopyYaml}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[#23293a] bg-[#191f2e] px-3 py-2 text-xs font-semibold text-slate-200 transition hover:border-amber-400/60 hover:text-amber-200"
-              >
-                {copied ? (
-                  <>
-                    <Check className="h-3.5 w-3.5 text-emerald-400" />
-                    <span className="text-emerald-300">Copied!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="h-3.5 w-3.5" />
-                    <span>Copy YAML</span>
-                  </>
-                )}
-              </button>
             </div>
 
-            <div className="bg-[#0b0d14] p-4">
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                config_patch_yaml
+            <div className="bg-[#fffdf9] p-5">
+              <div className="mb-2 text-xs font-bold uppercase tracking-wider text-[#6b5e4e]">
+                Recommended Configuration Patch
               </div>
               <pre
-                className="overflow-x-auto rounded-lg border border-[#23293a] bg-[#07090e] p-4 font-mono text-xs leading-relaxed"
+                className="overflow-x-auto rounded-2xl border border-[#e4d2b4] bg-[#faf4e8] p-4 font-mono text-xs leading-relaxed text-[#2b241d]"
                 data-testid="yaml-patch-block"
               >
-                {advice.config_patch_yaml
-                  .split(/\r?\n/)
-                  .map((line, idx) => renderYamlLine(line, idx))}
+                {advice.config_patch_yaml}
               </pre>
             </div>
           </div>
