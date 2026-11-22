@@ -3,6 +3,7 @@
 `court trial` and `court merge` run here. `serve`, `report`, `advise` and `retrial` reach
 their track's code through the registry, so those tracks never edit this file; until a track
 lands, its command says so and exits 1. The remaining stubs name the issue that builds them.
+`court plugins` lists installed plugins (see `engine/plugins.py`).
 """
 
 import asyncio
@@ -36,6 +37,7 @@ from wonderland_court.contracts import (
     TechniqueFamily,
     event_json_schema,
 )
+from wonderland_court.engine import plugins
 from wonderland_court.engine.cache import SQLiteResponseCache
 from wonderland_court.engine.defenses import parse_defenses
 from wonderland_court.engine.init_doctor import (
@@ -47,7 +49,9 @@ from wonderland_court.engine.init_doctor import (
     write_court_yaml,
 )
 from wonderland_court.engine.mock import MockDefenseModel, MockTarget
+from wonderland_court.engine.plugins import PluginKind
 from wonderland_court.engine.runner import plan_matches
+from wonderland_court.engine.scenarios import BUILT_IN_SCENARIOS, build_scenario
 from wonderland_court.engine.sharding import MergeError, Shard, merge_runs
 from wonderland_court.engine.store import (
     CourtReader,
@@ -61,6 +65,7 @@ from wonderland_court.engine.targets import (
     build_target,
     canonical_spec,
     is_agent_target,
+    is_plugin_target,
 )
 from wonderland_court.engine.tournament import TournamentResult, run_tournament
 from wonderland_court.llm import RateLimitedLLMClient, default_client, set_default_client
@@ -391,14 +396,15 @@ def trial(
     settings = settings.model_copy(update=updates)
     families, mutators = family or [], mutator or []
 
-    # An agent is built here, so a bad entrypoint, URL or ${ENV_VAR} is a usage error. A model
-    # target waits for the run's rate-limited client.
+    # An agent or plugin target is built here, so a bad entrypoint, URL, ${ENV_VAR} or broken
+    # plugin is a usage error. A model target waits for the run's rate-limited client. --mock
+    # always puts the mock Alice on trial.
     agent: Target | None = None
     if mock:
         name, kind = MockTarget.name, MockTarget.kind
     else:
         try:
-            if is_agent_target(settings.target):
+            if is_agent_target(settings.target) or is_plugin_target(settings.target):
                 agent = build_target(settings.target)
                 name, kind = agent.name, agent.kind
             else:
@@ -408,6 +414,9 @@ def trial(
             _fail(str(exc), code=2)
     defenses = _runnable_defenses(settings.defenses, kind, console)
     try:
+        for scenario in settings.scenarios:  # a broken scenario plugin is a usage error
+            if scenario not in BUILT_IN_SCENARIOS:
+                build_scenario(scenario, settings.seed)
         planned = plan_matches(
             settings,
             target=name,
@@ -836,3 +845,24 @@ def retrial(
 def schema() -> None:
     """Print the event JSON Schema, for generating the Courtroom's TypeScript types."""
     typer.echo(json.dumps(event_json_schema(), indent=2))
+
+
+@app.command(name="plugins")
+def list_plugins() -> None:
+    """List installed plugins and check that each one loads."""
+    rows = [
+        (kind.noun, plugin.name, plugin.package, plugins.problem(plugin))
+        for kind in PluginKind
+        for plugin in plugins.installed(kind)
+    ]
+    if not rows:
+        typer.echo("No plugins installed.")
+        return
+    table = [("KIND", "NAME", "PACKAGE", "STATUS")]
+    table += [(kind, name, package, problem or "ok") for kind, name, package, problem in rows]
+    kind_w, name_w, package_w = (max(len(row[column]) for row in table) for column in range(3))
+    for kind, name, package, status in table:
+        typer.echo(f"{kind:<{kind_w}}  {name:<{name_w}}  {package:<{package_w}}  {status}")
+    typer.echo("Plugins run inside Court with its permissions. Install only code you trust.")
+    if any(problem for *_, problem in rows):
+        raise typer.Exit(code=1)

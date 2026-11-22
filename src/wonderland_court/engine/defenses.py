@@ -10,10 +10,11 @@ their shape (`WC-` and hex), not by their value.
 
 The four baseline defenses live here. `spotlighting`, `guard` and `dual_llm` live in
 `defenses_advanced`. `DEFENSES` lists all seven, and `parse_defenses` and `compose_defenses`
-build any `+` stack of them.
+build any `+` stack of them and of `wonderland_court.defenses` plugins (see `plugins`).
 """
 
 import re
+from typing import cast
 
 from wonderland_court.contracts import (
     Defense,
@@ -24,6 +25,7 @@ from wonderland_court.contracts import (
 )
 from wonderland_court.registry import NotBuiltError
 
+from . import plugins
 from .defense_base import (
     DEFAULT_POLICY,
     Defended,
@@ -36,6 +38,7 @@ from .defense_base import (
     views,
 )
 from .defenses_advanced import DualLLM, Guard, Spotlighting
+from .plugins import PluginKind
 from .policy import broken_rule
 from .scenarios import CANARY_HEX_CHARS, CANARY_PREFIX
 from .targets import render_documents
@@ -202,25 +205,45 @@ raises `NotBuiltError`, so `court trial` can skip that stack and say why."""
 def parse_defenses(
     spec: str, kind: TargetKind, policy: DefensePolicy = DEFAULT_POLICY
 ) -> list[Defense]:
-    """The defenses in a `+` stack, innermost first.
+    """The defenses in a `+` stack, innermost first. A name that isn't built in is looked up
+    in the `wonderland_court.defenses` plugins.
 
-    Raises `NotBuiltError` for a planned defense that isn't built yet, and `ValueError` for an
-    unknown name or a defense that can't wrap this kind of target.
+    Raises `NotBuiltError` for a planned defense that isn't built yet, `PluginError` (a
+    `ValueError`) for a plugin that can't load or build, and `ValueError` for an unknown name
+    or a defense that can't wrap this kind of target.
     """
     names = [part.strip() for part in spec.split("+")]
     for name in names:  # a typo is a usage error even next to a defense that isn't built
-        if name not in DEFENSES and name not in PLANNED:
-            known = ", ".join([*DEFENSES, *PLANNED])
+        if not _known(name):
+            known = ", ".join([*DEFENSES, *PLANNED, *plugins.names(PluginKind.DEFENSE)])
             raise ValueError(f"unknown defense {name!r} in {spec!r}; known defenses: {known}")
     defenses = []
     for name in names:
         if name in PLANNED:
             raise NotBuiltError(f"the {name} defense isn't built yet ({PLANNED[name]})")
-        defense = DEFENSES[name](policy)
+        defense = DEFENSES[name](policy) if name in DEFENSES else _plugin_defense(name, policy)
         if not defense.supports(kind):
             raise ValueError(f"{name} can't wrap {kind.value} targets")
         defenses.append(defense)
     return defenses
+
+
+def _known(name: str) -> bool:
+    """Built in, planned or an installed plugin. A name two plugins claim raises PluginError."""
+    return name in DEFENSES or name in PLANNED or plugins.find(PluginKind.DEFENSE, name) is not None
+
+
+def _is_defense(built: object) -> bool:
+    return isinstance(getattr(built, "name", None), str) and all(
+        callable(getattr(built, method, None)) for method in ("supports", "wrap")
+    )
+
+
+def _plugin_defense(name: str, policy: DefensePolicy) -> Defense:
+    """A defense plugin's class, built from the match's policy like a built-in one."""
+    built = plugins.build(PluginKind.DEFENSE, name, policy, check=_is_defense, expected="a Defense")
+    assert built is not None  # parse_defenses only asks for installed plugins
+    return cast(Defense, built)
 
 
 def compose_defenses(spec: str, target: Target, policy: DefensePolicy = DEFAULT_POLICY) -> Target:

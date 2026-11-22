@@ -9,6 +9,9 @@ the target id and returns native tool calls already parsed. This module turns a 
 a `ModelTarget`, renders attached documents into the conversation, recovers tool calls that
 local models write as JSON text, and times each call.
 
+`plugin:<name>[:<argument>]` names a target that a `wonderland_court.targets` plugin builds
+(see `plugins`).
+
 Nothing here forces a tool call. Ollama's `/v1` has no `tool_choice`, so no request sets it.
 Provider prefixes and tool argument coercion come from `wonderland_court.llm`, so a target id
 and a tool call mean the same thing here as they do to the client.
@@ -18,7 +21,7 @@ import json
 import re
 from collections.abc import Iterator, Sequence
 from time import perf_counter
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from wonderland_court.config import HttpTargetConfig, PythonTargetConfig, TargetConfig
 from wonderland_court.contracts import (
@@ -38,6 +41,9 @@ from wonderland_court.llm import (
     parse_model_spec,
     tool_arguments,
 )
+
+from . import plugins
+from .plugins import PluginKind
 
 
 class ChatClient(Protocol):
@@ -67,6 +73,9 @@ _NO_SPACES = re.compile(r"\S+")
 _BASE_URL = re.compile(r"https?://\S+")
 
 
+PLUGIN_PREFIX = "plugin"
+
+
 def canonical_spec(spec: str) -> str:
     """The canonical id of a model target, or a `ValueError` saying what is wrong.
 
@@ -79,6 +88,8 @@ def canonical_spec(spec: str) -> str:
         raise ValueError(f"Empty target spec. {_USAGE}")
     head, _, rest = spec.partition(":")
     prefix = head.lower()
+    if prefix == PLUGIN_PREFIX:
+        raise ValueError(f"{spec!r} is a plugin target, not a model target. Use build_target.")
     if prefix in PROVIDERS:
         spec = f"{prefix}:{rest}"
 
@@ -273,7 +284,8 @@ def build_target(
     """The target for a target id or a `court.yaml` target block.
 
     `python:<module.path>:<callable>` and a `{kind: python}` block build a Python agent, and an
-    http(s) URL or a `{kind: http}` block builds an HTTP agent. Anything else is a model id.
+    http(s) URL or a `{kind: http}` block builds an HTTP agent. `plugin:<name>[:<argument>]`
+    builds the target of a `wonderland_court.targets` plugin. Anything else is a model id.
     `llm`, `temperature` and `seed` only apply to model targets: an agent picks its own.
     """
     # agent_targets imports this module, so import it here rather than at the top.
@@ -283,6 +295,8 @@ def build_target(
         return HttpAgentTarget(spec)
     if isinstance(spec, PythonTargetConfig):
         return PythonAgentTarget(spec.entrypoint)
+    if is_plugin_target(spec):
+        return plugin_target(spec)
     spec = spec.strip()
     head, _, rest = spec.partition(":")
     prefix = head.lower()
@@ -293,3 +307,33 @@ def build_target(
             raise ValueError(f"{spec!r} should be a full URL, such as http://localhost:8000/chat.")
         return HttpAgentTarget(HttpTargetConfig(kind="http", url=spec))
     return ModelTarget(spec, llm, temperature=temperature, seed=seed)
+
+
+# Plugin targets
+
+
+def is_plugin_target(spec: object) -> bool:
+    """Whether a `court.yaml` target is `plugin:<name>[:<argument>]`."""
+    return isinstance(spec, str) and spec.strip().partition(":")[0].lower() == PLUGIN_PREFIX
+
+
+def _is_target(built: object) -> bool:
+    return (
+        isinstance(getattr(built, "name", None), str)
+        and isinstance(getattr(built, "kind", None), TargetKind)
+        and callable(getattr(built, "respond", None))
+    )
+
+
+def plugin_target(spec: str) -> Target:
+    """The target a `wonderland_court.targets` plugin builds for `plugin:<name>[:<argument>]`.
+
+    The plugin is called with the argument, or "" without one, and picks its own name, kind
+    and model client. Raises `PluginError` (a `ValueError`) for an unknown or broken plugin.
+    """
+    name, _, argument = spec.strip().partition(":")[2].partition(":")
+    built = plugins.build(PluginKind.TARGET, name, argument, check=_is_target, expected="a Target")
+    if built is None:
+        known = ", ".join(plugins.names(PluginKind.TARGET)) or "none are installed"
+        raise ValueError(f"no target plugin is named {name!r} in {spec!r}; target plugins: {known}")
+    return cast(Target, built)
