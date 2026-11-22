@@ -33,6 +33,7 @@ from wonderland_court.engine.runner import (
     match_seed,
     plan_matches,
     run_match,
+    run_matches,
     run_trial,
 )
 from wonderland_court.engine.scenarios import CORE_SCENARIOS, build_scenario
@@ -383,6 +384,36 @@ async def test_a_failing_trial_is_marked_failed(store: CourtStore) -> None:
         )
     run = await store.get_run("run-broken")
     assert run is not None and run.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_run_matches_replays_given_specs_under_a_parent_run(store: CourtStore) -> None:
+    """What `court retrial` does: the baseline's specs, one new defense, a parent run id."""
+    await mock_trial(store, "run-base", defenses=["plain", "sandwich"])
+    baseline = [
+        e.match for e in await store.get_events_after("run-base") if isinstance(e, MatchStarted)
+    ]
+    hardened = [s.model_copy(update={"defense": "output_filter"}) for s in baseline]
+
+    result = await run_matches(
+        config(defenses=["output_filter"]),
+        hardened,
+        target=MockTarget(),
+        attacker=ScriptedAttacker(),
+        judge=CanaryJudge(),
+        store=store,
+        run_id="run-retry",
+        parent_run_id="run-base",
+    )
+    assert result.leaks == 0
+    run = await store.get_run("run-retry")
+    assert run is not None and run.parent_run_id == "run-base" and run.status == "finished"
+
+    events = await store.get_events_after("run-retry")
+    check_run(events)
+    assert isinstance(events[0], RunStarted) and events[0].defenses == ["output_filter"]
+    replayed = [e.match for e in events if isinstance(e, MatchStarted)]
+    assert sorted(s.seed for s in replayed) == sorted(s.seed for s in baseline)
 
 
 def test_scenarios_build_for_every_planned_seed() -> None:

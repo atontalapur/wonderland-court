@@ -1,8 +1,8 @@
 """The `court` command line.
 
-`court trial` runs here. `serve`, `report` and `advise` reach their track's code through the
-registry, so those tracks never edit this file; until a track lands, its command says so and
-exits 1. The remaining stubs name the issue that builds them.
+`court trial` runs here. `serve`, `report`, `advise` and `retrial` reach their track's code
+through the registry, so those tracks never edit this file; until a track lands, its command
+says so and exits 1. The remaining stubs name the issue that builds them.
 """
 
 import asyncio
@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
+import yaml
 from rich.console import Console
 from rich.markup import escape
 from rich.progress import Progress
+from rich.table import Table
 
 from wonderland_court import __version__, registry
 from wonderland_court.config import ConfigError, CourtConfig, PresetName, load_config
@@ -44,7 +46,13 @@ from wonderland_court.engine.init_doctor import (
 )
 from wonderland_court.engine.mock import MockTarget
 from wonderland_court.engine.runner import TrialResult, plan_matches, run_trial
-from wonderland_court.engine.store import CourtReader, CourtStore
+from wonderland_court.engine.store import (
+    CourtReader,
+    CourtStore,
+    RemediationAdvice,
+    RetrialComparison,
+    RunRecord,
+)
 from wonderland_court.engine.targets import build_target, canonical_spec, is_agent_target
 from wonderland_court.llm import RateLimitedLLMClient, default_client, set_default_client
 
@@ -460,14 +468,6 @@ def report(
         typer.echo(f"Wrote {format.value.upper()} report to {out}")
 
 
-async def _latest_run(db_path: Path) -> str | None:
-    if not db_path.exists():
-        return None
-    async with CourtReader(db_path) as reader:
-        runs = await reader.list_runs()
-    return runs[0].run_id if runs else None
-
-
 @app.command()
 def ci(
     config: ConfigOption = DEFAULT_CONFIG,
@@ -479,33 +479,239 @@ def ci(
     _not_built("ci", "Engine, #26")
 
 
+# court advise and court retrial, from the Adversaries track (#24)
+
+
+HARDENED_NAME = "court.hardened.yaml"
+HardenedOption = Annotated[
+    Path | None,
+    typer.Option(help=f"The hardened config. Defaults to {HARDENED_NAME} next to court.yaml."),
+]
+CHECK_MODELS = "Check that Ollama is running and the models are pulled (`ollama list`)."
+
+
+async def _find_run(db_path: Path, run_id: str | None, *, retrials: bool) -> RunRecord | None:
+    """Run `run_id`, else the latest run, skipping retrials unless `retrials` is set. `None`
+    when the database or the run isn't there."""
+    if not db_path.is_file():
+        return None
+    async with CourtReader(db_path) as reader:
+        if run_id is not None:
+            return await reader.get_run(run_id)
+        runs = await reader.list_runs()
+    return next((r for r in runs if retrials or r.parent_run_id is None), None)
+
+
+def _run_or_fail(db_path: Path, run_id: str | None, *, retrials: bool = True) -> RunRecord:
+    found = asyncio.run(_find_run(db_path, run_id, retrials=retrials))
+    if found is not None:
+        return found
+    if run_id is not None:
+        _fail(f"No run {run_id} in {db_path}.")
+    _fail(f"No runs in {db_path} yet. Run `court trial` first.")
+
+
+def _remediator(settings: CourtConfig, command: str) -> registry.Remediator:
+    remediator = registry.load_remediator(settings, default_client())
+    if isinstance(remediator, registry.NotBuilt):
+        component = registry.REMEDIATOR
+        _fail(f"court {command}: {component.module} isn't built yet ({component.issue})")
+    return remediator
+
+
+def _hardened_path(hardened: Path | None, config: Path) -> Path:
+    return hardened if hardened is not None else config.parent / HARDENED_NAME
+
+
+def _print_advice(
+    console: Console, advice: RemediationAdvice, run: RunRecord, hardened: Path
+) -> None:
+    if advice.clusters:
+        table = Table(title=escape(f"Failure families in run {advice.run_id}"))
+        for column in ("Cluster", "Family", "Technique", "Scenario", "Matches", "Root cause"):
+            table.add_column(column)
+        for cluster in advice.clusters:
+            table.add_row(
+                *(
+                    escape(str(cluster[key]))
+                    for key in (
+                        "cluster_id",
+                        "family_label",
+                        "technique_family",
+                        "scenario",
+                        "count",
+                        "root_cause_summary",
+                    )
+                )
+            )
+        console.print(table)
+    else:
+        console.print(escape(f"No matches broke in run {advice.run_id}."))
+
+    tried = ", ".join(run.config.get("defenses", []))
+    console.print(f"\nRecommended defense: [bold]{escape(advice.recommended_defense)}[/]")
+    console.print(escape(advice.rationale))
+    console.print(f"[red]{escape(f'- defenses: {tried}')}[/]")
+    console.print(f"[green]{escape(f'+ defenses: {advice.recommended_defense}')}[/]")
+    try:
+        parse_defenses(advice.recommended_defense, advice.target_kind)
+    except registry.NotBuiltError as exc:
+        console.print(
+            f"[yellow]Note: {escape(str(exc))}, so `court retrial` can't run this stack yet. Edit "
+            f"{escape(str(hardened))} to a stack that runs today.[/]"
+        )
+    console.print(escape(f"\nWrote {hardened}. Next: `court retrial` replays the same seeds."))
+
+
 @app.command()
 def advise(
     config: ConfigOption = DEFAULT_CONFIG,
     run: Annotated[str | None, typer.Option(help="Run id. Defaults to the latest run.")] = None,
+    hardened: HardenedOption = None,
+    db: DbOption = None,
 ) -> None:
     """Advice from a Caterpillar: group failures and write a hardened config."""
-    settings = _settings(config)
-    remediator = registry.load_remediator(settings, default_client())
-    if isinstance(remediator, registry.NotBuilt):
-        component = registry.REMEDIATOR
-        _fail(f"court advise: {component.module} isn't built yet ({component.issue})")
-    run_id = run or asyncio.run(_latest_run(settings.db_path))
-    if run_id is None:
-        _fail(f"No runs in {settings.db_path} yet. Run `court trial` first.")
+    remediator = _remediator(_settings(config), "advise")
+    db_path = _db_path(db, config)
+    record = _run_or_fail(db_path, run)
+    path = _hardened_path(hardened, config)
     try:
-        advice = asyncio.run(remediator.advise(settings.db_path, run_id))
-    except RuntimeError as exc:  # the Caterpillar says when it can't read a run yet
+        advice = asyncio.run(remediator.advise(db_path, record.run_id, hardened_path=path))
+    except (LookupError, ValueError) as exc:
         _fail(f"court advise: {exc}")
-    typer.echo(advice)
+    except Exception as exc:
+        if record.target == MockTarget.name:
+            raise  # a mock run's advice uses no model, so this is a bug: keep the trace
+        _fail(f"court advise stopped: {type(exc).__name__}: {exc}\n{CHECK_MODELS}")
+    _print_advice(Console(), advice, record, path)
+
+
+def _hardened_defense(path: Path) -> str:
+    """The one defense stack in a `court advise` patch."""
+    if not path.is_file():
+        _fail(f"No hardened config at {path}. Run `court advise` first.")
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        _fail(f"can't read {path}: {exc}", code=2)
+    defenses = data.get("defenses") if isinstance(data, dict) else None
+    if not (isinstance(defenses, list) and len(defenses) == 1 and isinstance(defenses[0], str)):
+        _fail(f"{path} should list exactly one defense stack under `defenses:`.", code=2)
+    return defenses[0]
+
+
+async def _retrial(
+    remediator: registry.Remediator,
+    db_path: Path,
+    baseline: RunRecord,
+    defense: str,
+    console: Console,
+) -> RetrialComparison:
+    """Replay `baseline` behind `defense` with the target, models and settings it ran with."""
+    config = CourtConfig.model_validate(baseline.config)
+    async with CourtStore(db_path, jsonl_dir=db_path.parent / "runs") as store:
+        target: Target
+        attacker: Attacker
+        judge: Judge
+        if baseline.target == MockTarget.name:
+            client = default_client()
+            target, attacker, judge = (
+                MockTarget(),
+                registry.ScriptedAttacker(),
+                registry.CanaryJudge(),
+            )
+        else:
+            if not isinstance(config.target, str):
+                raise ValueError("retrying an agent target needs agent targets (#19)")
+            client = RateLimitedLLMClient(cache=SQLiteResponseCache(store))
+            set_default_client(client)
+            target = build_target(config.target, client)
+            attacker = registry.load_attacker(config, client)
+            judge = registry.load_judge(config, client)
+        utility = registry.load_utility_evaluator(config, client)
+        total = len(await store.get_matches(baseline.run_id))
+        with Progress(console=console, transient=True) as progress:
+            return await remediator.retrial(
+                store,
+                baseline.run_id,
+                defense=defense,
+                target=target,
+                attacker=attacker,
+                judge=judge,
+                utility=utility,
+                on_event=_Reporter(progress, total),
+            )
+
+
+def _share(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.0%}"
+
+
+def _print_retrial(console: Console, comparison: RetrialComparison, defense: str) -> None:
+    table = Table(
+        title=escape(
+            f"Retrial {comparison.retrial_run_id} of {comparison.baseline_run_id}, same seeds"
+        )
+    )
+    for column in ("Scenario", "Matches", "Attack success before", "After", "Change"):
+        table.add_column(column)
+    for scenario, diff in sorted(comparison.per_scenario.items()):
+        table.add_row(
+            escape(scenario),
+            str(diff["paired"]),
+            _share(diff["baseline_asr"]),
+            _share(diff["retrial_asr"]),
+            f"{diff['asr_delta'] * 100:+.0f} pts",
+        )
+    table.add_row(
+        "all",
+        str(len(comparison.matched_seeds)),
+        _share(comparison.baseline_asr),
+        _share(comparison.retrial_asr),
+        f"{comparison.asr_delta * 100:+.0f} pts",
+        style="bold",
+    )
+    console.print(table)
+    console.print(
+        f"Utility (Dodo pass rate): {_share(comparison.baseline_utility)} before, "
+        f"{_share(comparison.retrial_utility)} after, with {escape(defense)}."
+    )
 
 
 @app.command()
 def retrial(
-    run: Annotated[str | None, typer.Option(help="Run id. Defaults to the latest run.")] = None,
+    config: ConfigOption = DEFAULT_CONFIG,
+    run: Annotated[
+        str | None,
+        typer.Option(help="Baseline run id. Defaults to the latest run that isn't a retrial."),
+    ] = None,
+    hardened: HardenedOption = None,
+    db: DbOption = None,
 ) -> None:
     """Re-run the same seeds against the hardened config."""
-    _not_built("retrial", "Adversaries, #24")
+    console = Console()
+    remediator = _remediator(_settings(config), "retrial")
+    db_path = _db_path(db, config)
+    path = _hardened_path(hardened, config)
+    defense = _hardened_defense(path)
+    baseline = _run_or_fail(db_path, run, retrials=False)
+    console.print(
+        escape(f"Retrying run {baseline.run_id} on the same seeds with {defense} ({path}).")
+    )
+    try:
+        comparison = asyncio.run(_retrial(remediator, db_path, baseline, defense, console))
+    except registry.NotBuiltError as exc:
+        _fail(f"court retrial: {exc}. Edit {path} to a stack that runs today.")
+    except (LookupError, ValueError) as exc:
+        _fail(f"court retrial: {exc}")
+    except Exception as exc:
+        if baseline.target == MockTarget.name:
+            raise  # nothing outside Court runs in a mock retrial, so this is a bug
+        _fail(
+            f"The retrial stopped: {type(exc).__name__}: {exc}\n"
+            f"The retrial run is marked failed in {db_path}. {CHECK_MODELS}"
+        )
+    _print_retrial(console, comparison, defense)
 
 
 @app.command(hidden=True)

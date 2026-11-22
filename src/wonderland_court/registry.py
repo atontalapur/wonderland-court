@@ -31,6 +31,7 @@ from wonderland_court.contracts import (
     AttackContext,
     Attacker,
     Document,
+    Event,
     Judge,
     JudgeLayer,
     Ruling,
@@ -41,6 +42,7 @@ from wonderland_court.contracts import (
     Verdict,
 )
 from wonderland_court.engine.policy import broken_rule
+from wonderland_court.engine.store import CourtStore, RemediationAdvice, RetrialComparison
 from wonderland_court.llm import LLMClient
 
 log = logging.getLogger(__name__)
@@ -102,9 +104,24 @@ class UtilityEvaluator(Protocol):
 
 
 class Remediator(Protocol):
-    """The Caterpillar: reads a finished run and returns a hardened court.yaml patch."""
+    """The Caterpillar: advice for a recorded run, then a retrial of it on the same seeds."""
 
-    async def advise(self, db_path: Path, run_id: str) -> str: ...
+    async def advise(
+        self, db_path: Path, run_id: str, *, hardened_path: Path | None = None
+    ) -> RemediationAdvice: ...
+
+    async def retrial(
+        self,
+        store: CourtStore,
+        run_id: str,
+        *,
+        defense: str,
+        target: Target,
+        attacker: Attacker,
+        judge: Judge,
+        utility: UtilityEvaluator,
+        on_event: Callable[[Event], None] | None = None,
+    ) -> RetrialComparison: ...
 
 
 class ServerRunner(Protocol):
@@ -250,7 +267,23 @@ class NotBuilt:
         c = self._component
         return NotBuiltError(f"{c.module} isn't built yet ({c.issue})")
 
-    async def advise(self, db_path: Path, run_id: str) -> str:
+    async def advise(
+        self, db_path: Path, run_id: str, *, hardened_path: Path | None = None
+    ) -> RemediationAdvice:
+        raise self._fail()
+
+    async def retrial(
+        self,
+        store: CourtStore,
+        run_id: str,
+        *,
+        defense: str,
+        target: Target,
+        attacker: Attacker,
+        judge: Judge,
+        utility: UtilityEvaluator,
+        on_event: Callable[[Event], None] | None = None,
+    ) -> RetrialComparison:
         raise self._fail()
 
     def serve(self, host: str, port: int, replay: Path | None, speed: float) -> None:
