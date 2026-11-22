@@ -35,8 +35,8 @@ Give all four honestly—don't hedge:
 | --- | --- | --- | --- |
 | **1** | **Small local attackers are weaker than human red-teamers** | Local `4B`–`8B` models (e.g., `qwen3.5:4b`, `llama3.1`) don't discover every creative exploit a skilled human or frontier attacker can. | Treat a low Attack Success Rate as a **lower bound**, never mathematical proof of safety—and support remote frontier endpoints (`openai:`, `anthropic:`) when deeper pressure is needed. |
 | **2** | **The LLM judge can misread paraphrased hints** | Layer 4 (`llm`) can miss subtle leaks or false-positive on edge-case paraphrases. | Deterministic layers run first—**Layer 1 `canary`** (exact planted secret `WC-xxxxxx`) and **Layer 2 `tool_call`** (exact argument policy checks like `amount > 50`)—followed by `similarity`, and we publish **Judge Calibration** agreement so headline numbers never rely on an LLM judge alone. |
-| **3** | **Defense results depend heavily on the target model** | Published literature shows defenses swing wildly by model (e.g., Spotlighting jumped to `19.88%` vs. `13.98%` undefended in ToolFence and `54.5%` static ASR on Gemini 2.5 Flash in AutoDojo; CaMeL cut ASR to `0.42%` while clean utility fell from `50.39` to `34.50`). | We don't ask you to trust a static leaderboard—Wonderland Court runs the tournament against **your own model or agent** (`court.yaml`) and pairs safety (ASR + Elo) with **Dodo** helpfulness. |
-| **4** | **Local inference is slow** | Multi-turn adaptive attacks + fuzzing + judge + Dodo utility checks across 7 defense stacks multiply local Ollama calls. | Built-in `--quick` preset, response caching, outbound concurrency caps (2 concurrent local, 4 remote), 3-laptop benchmark sharding, and `court serve --replay <file.jsonl> --speed 4.0`. |
+| **3** | **Defense results depend heavily on the target model** | Published literature shows defenses swing wildly by model (e.g., Spotlighting jumped to `19.88%` vs. `13.98%` undefended in ToolFence and `54.5%` static ASR on Gemini 2.5 Flash in AutoDojo; CaMeL cut ASR to `0.42%` while clean utility fell from `50.39` to `34.50`). | We don't ask you to trust a static leaderboard—Wonderland Court runs the tournament against **your own model or agent** (`court.yaml`) and pairs safety (ASR + Elo) with **Dodo** helpfulness. On our `llama3.1` run the guard was the whole difference (`100%` -> `0%` attack success) and cost a quarter of the benign refund tasks. |
+| **4** | **Local inference is slow** | Multi-turn adaptive attacks + fuzzing + judge + Dodo utility checks across 7 defense stacks multiply local Ollama calls. | Built-in `--quick` preset, response caching, outbound concurrency caps (2 concurrent local, 4 remote), 3-laptop benchmark sharding, and `court serve --replay <file.jsonl> --speed 4.0`. On a 12 GB GPU, 8 matches at once with three models loaded ran out of GPU memory until Ollama ran one request at a time (`OLLAMA_NUM_PARALLEL=1`). |
 
 ---
 
@@ -50,6 +50,9 @@ Give all four honestly—don't hedge:
 
 - **"How is this different from `garak`, `PyRIT`, or `promptfoo`?"**
   `garak` excels at broad CLI probe scans, `PyRIT` at adaptive multi-turn campaigns, and `promptfoo` at YAML/CI evals—but none of them combine a **head-to-head defense tournament**, **Dodo utility cost measurement**, and **automated Caterpillar config hardening + same-seed retrial** in one local tool.
+
+- **"Why is Dodo utility so low on `drink_me`?"**
+  Because of the model, not the defenses. Undefended `llama3.1` calls a tool on every benign "summarize this email" task: it emails the summary to staff, once issued a `$0` refund on the wrong order, and once emailed a customer outside the shop's domain. The Dodo fails each of those as an unrequested side effect, so `drink_me` is `0%` for every stack, `plain` included.
 
 - **"What about Ollama's tool-calling quirks?"**
   Ollama's `/v1` endpoint supports tools and JSON-schema output, but not forced `tool_choice`. None of our engine, judge, or adversary flows depend on forcing a tool call.

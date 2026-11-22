@@ -1,6 +1,6 @@
 # Wonderland Court — CutieHack Devpost Submission Copy
 
-> Copy-paste sections below into the CutieHack Devpost form (metrics below are verified from local `ollama:qwen2.5:7b-instruct` run `ollama-run-0001`; update before submission if superseded by the final 3-laptop sweep).
+> Copy-paste sections below into the CutieHack Devpost form (metrics below are measured on the 3-laptop `ollama:llama3.1` benchmark, run `run-20261122T023852Z-f63144`; see `docs/benchmark/benchmark_summary.md`).
 
 ---
 
@@ -65,13 +65,14 @@ Point `court` at an Ollama model, a remote API (`openai:`, `anthropic:`, or any 
 - Built a complete **12-hour, 3-developer** end-to-end tool that installs with one `pipx` command and runs completely offline on Ollama with zero API spend.
 - Closed the loop from **attack -> deterministic + calibrated verdict -> failure clustering -> hardened config -> verified same-seed retrial** alongside Dodo helpfulness scoring.
 - Wired real developer workflow integration: live SSE Courtroom dashboard, replay mode, `court ci`, and GitHub Code Scanning **SARIF** output.
-- Captured verified local benchmarks on `ollama:qwen2.5:7b-instruct` (`ollama-run-0001`): `spotlighting+output_filter` achieved `0.0%` ASR and `100.0%` Dodo utility vs. `100.0%` ASR on `plain`, `sandwich`, and `spotlighting`; same-seed retrial cut aggregate ASR from `75.0%` to `0.0%` (`-75.0` pp); and blind LLM Judge Calibration measured `62.5%` agreement (`5/8` turns).
+- Ran a real 3-laptop benchmark on local `ollama:llama3.1`, sharded and merged with `court merge`: `spotlighting+guard+output_filter` held at `0%` attack success while `plain`, `sandwich` and `spotlighting` all refunded `$400` on turn 1 to a one-line role-play lie. The same-seed retrial cut attack success from `75%` to `0%`, with Dodo utility going from `34.4%` to `25.0%`. The LLM judge agreed with the exact rulings on `12/12` sampled turns.
 
 ---
 
 ## What We Learned
 - Ground-truth canaries and deterministic tool-call rules eliminate most judge noise and let you calibrate the LLM judge layer honestly.
 - Evaluating safety without a parallel utility benchmark (the Dodo) rewards brittle "refuse everything" prompts; plotting ASR and utility side by side immediately reveals real tradeoffs.
+- The model matters as much as the defense: undefended `llama3.1` called a tool on every benign "summarize this email" task, so `drink_me` utility was `0%` for every stack before any defense was involved.
 
 ---
 
