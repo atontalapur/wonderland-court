@@ -218,7 +218,9 @@ def check_parts(parts: Sequence[MergePart], *, partial: bool = False) -> list[st
     total = split[0].total
     missing = [f"{part}/{total}" for part in range(1, total + 1) if part not in have]
     if missing and not partial:
-        raise MergeError(f"shard {', '.join(missing)} is missing; merge it too, or pass --partial")
+        names = ", ".join(missing)
+        which = f"shard {names} is" if len(missing) == 1 else f"shards {names} are"
+        raise MergeError(f"{which} missing; merge them too, or pass --partial")
     return missing
 
 

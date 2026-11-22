@@ -1,12 +1,13 @@
 """The `court` command line.
 
-`court trial` runs here. `serve`, `report`, `advise` and `retrial` reach their track's code
-through the registry, so those tracks never edit this file; until a track lands, its command
-says so and exits 1. The remaining stubs name the issue that builds them.
+`court trial` and `court merge` run here. `serve`, `report`, `advise` and `retrial` reach
+their track's code through the registry, so those tracks never edit this file; until a track
+lands, its command says so and exits 1. The remaining stubs name the issue that builds them.
 """
 
 import asyncio
 import json
+from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -29,6 +30,7 @@ from wonderland_court.contracts import (
     MatchSpec,
     MatchStarted,
     MutatorId,
+    Standing,
     Target,
     TargetKind,
     TechniqueFamily,
@@ -45,7 +47,8 @@ from wonderland_court.engine.init_doctor import (
     write_court_yaml,
 )
 from wonderland_court.engine.mock import MockDefenseModel, MockTarget
-from wonderland_court.engine.runner import TrialResult, plan_matches, run_trial
+from wonderland_court.engine.runner import plan_matches
+from wonderland_court.engine.sharding import MergeError, Shard, merge_runs
 from wonderland_court.engine.store import (
     CourtReader,
     CourtStore,
@@ -59,6 +62,7 @@ from wonderland_court.engine.targets import (
     canonical_spec,
     is_agent_target,
 )
+from wonderland_court.engine.tournament import TournamentResult, run_tournament
 from wonderland_court.llm import RateLimitedLLMClient, default_client, set_default_client
 
 app = typer.Typer(
@@ -251,19 +255,21 @@ async def _trial(
     *,
     mock: bool,
     agent: Target | None,
+    utility: bool,
     defenses: list[str],
     families: list[TechniqueFamily],
     mutators: list[MutatorId],
     console: Console,
     total: int,
-) -> tuple[TrialResult, Path]:
+) -> tuple[TournamentResult, Path]:
     jsonl_dir = settings.db_path.parent / "runs"
     async with CourtStore(settings.db_path, jsonl_dir=jsonl_dir) as store:
         target: Target
         attacker: Attacker
         judge: Judge
         defense_llm: ChatClient
-        if mock:
+        dodo: registry.UtilityEvaluator | None = None
+        if mock:  # the Dodo has nothing to score on the scripted Alice, so it sits out
             target, attacker, judge = (
                 MockTarget(),
                 registry.ScriptedAttacker(),
@@ -281,8 +287,10 @@ async def _trial(
             defense_llm = client
             attacker = registry.load_attacker(settings, client)
             judge = registry.load_judge(settings, client)
+            if utility:
+                dodo = registry.load_utility_evaluator(settings, client)
         with Progress(console=console, transient=True) as progress:
-            result = await run_trial(
+            result = await run_tournament(
                 settings,
                 target=target,
                 attacker=attacker,
@@ -291,11 +299,32 @@ async def _trial(
                 defenses=defenses,
                 families=families,
                 mutators=mutators,
+                utility=dodo,
                 on_event=_Reporter(progress, total),
                 defense_llm=defense_llm,
             )
         await _calibrate(result.run_id, store, judge, console)
     return result, jsonl_dir / f"{result.run_id}.jsonl"
+
+
+def _leaderboard(standings: Sequence[Standing], title: str = "Leaderboard") -> Table:
+    """Attack success with its 95% Wilson interval, mean turns to break and Dodo utility."""
+    table = Table(title=escape(title))
+    table.add_column("Defense", overflow="fold")
+    for column in ("Elo", "Matches", "ASR", "95% CI", "Turns", "Utility"):
+        table.add_column(column, justify="right", no_wrap=True)
+    for row in standings:
+        turns = row.mean_turns_to_break
+        table.add_row(
+            escape(row.defense),
+            f"{row.elo:.0f}",
+            str(row.matches),
+            f"{row.attack_success:.0%}",
+            f"{row.ci_low * 100:.0f}-{row.ci_high * 100:.0f}%",
+            "-" if turns is None else f"{turns:.1f}",
+            "-" if row.utility is None else f"{row.utility:.0%}",
+        )
+    return table
 
 
 @app.command()
@@ -330,6 +359,17 @@ def trial(
     db: Annotated[
         Path | None, typer.Option(help="SQLite file to record the run in. Overrides court.yaml.")
     ] = None,
+    shard: Annotated[
+        str | None,
+        typer.Option(
+            help="Play part k of N, such as 2/3, so N laptops split one tournament. Join the "
+            "parts with `court merge`."
+        ),
+    ] = None,
+    utility: Annotated[
+        bool,
+        typer.Option(help="Score each defense on the Dodo's benign tasks after the rounds."),
+    ] = True,
 ) -> None:
     """Run the tournament, live in the terminal."""
     console = Console()
@@ -339,6 +379,15 @@ def trial(
         updates["mode"] = mode
     if db is not None:
         updates["db_path"] = db
+    part: Shard | None = None
+    if shard is not None:
+        try:
+            part = Shard.parse(shard)
+        except ValueError as exc:
+            _fail(str(exc), code=2)
+        updates["shard"] = str(part)
+    elif settings.shard is not None:
+        part = Shard.parse(settings.shard)
     settings = settings.model_copy(update=updates)
     families, mutators = family or [], mutator or []
 
@@ -369,8 +418,12 @@ def trial(
         )
     except ValueError as exc:
         _fail(str(exc), code=2)
+    if part is not None:
+        planned = part.select(planned)
 
     where = "offline, mock" if mock else name
+    if part is not None:
+        where += f", shard {part}"
     console.print(f"[bold]Wonderland Court[/] is in session: {len(planned)} matches ({where}).")
     try:
         result, jsonl = asyncio.run(
@@ -378,6 +431,7 @@ def trial(
                 settings,
                 mock=mock,
                 agent=agent,
+                utility=utility,
                 defenses=defenses,
                 families=families,
                 mutators=mutators,
@@ -398,7 +452,58 @@ def trial(
     console.print(
         f"\n{result.leaks} of {len(result.matches)} matches leaked. Run [bold]{result.run_id}[/]"
     )
+    if result.timed_out:
+        console.print(
+            f"[yellow]{len(result.timed_out)} matches ran past {settings.match_timeout_s:g}s and "
+            f"are left out of the standings: {escape(', '.join(result.timed_out))}[/]"
+        )
+    title = f"Leaderboard for shard {part}" if part is not None else "Leaderboard"
+    console.print(_leaderboard(result.standings, title))
     console.print(escape(f"Recorded in {settings.db_path} and {jsonl}"))
+    if part is not None:
+        console.print(
+            escape(
+                f"Merge the {part.total} shards with `court merge <db> ... --out merged.db`, "
+                "one database per laptop."
+            )
+        )
+
+
+@app.command()
+def merge(
+    dbs: Annotated[
+        list[Path],
+        typer.Argument(help="The court databases to merge, such as one per laptop."),
+    ],
+    out: Annotated[Path, typer.Option("--out", "-o", help="Database to write the merged run to.")],
+    run: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--run",
+            help="Merge this run (repeatable). Defaults to the latest finished run in each "
+            "database.",
+        ),
+    ] = None,
+    partial: Annotated[bool, typer.Option(help="Merge even when some shards are missing.")] = False,
+) -> None:
+    """Join the shards of one tournament into one run, with the standings recomputed."""
+    try:
+        result = asyncio.run(merge_runs(dbs, out, run_ids=run or [], partial=partial))
+    except (MergeError, FileNotFoundError) as exc:
+        _fail(f"court merge: {exc}", code=2)
+    console = Console()
+    shards = ", ".join(str(part.shard) for part in result.parts if part.shard is not None)
+    which = f" (shards {shards})" if shards else ""
+    console.print(
+        f"Merged {len(result.parts)} runs{escape(which)} into run [bold]{result.run_id}[/]: "
+        f"{result.leaks} of {result.matches} matches leaked."
+    )
+    if result.missing:
+        console.print(
+            f"[yellow]Without shards {', '.join(result.missing)}, the board is partial.[/]"
+        )
+    console.print(_leaderboard(result.standings))
+    console.print(escape(f"Recorded in {out}. Open it with `court serve --db {out}`."))
 
 
 # Commands other tracks build, reached through the registry

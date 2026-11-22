@@ -26,7 +26,7 @@ runner = CliRunner()
 WIDE = {"COLUMNS": "200", "NO_COLOR": "1"}
 FAKE_RUN = Path(__file__).resolve().parents[1] / "fixtures" / "fake_run.jsonl"
 
-COMMANDS = ["init", "doctor", "trial", "serve", "report", "ci", "advise", "retrial"]
+COMMANDS = ["init", "doctor", "trial", "merge", "serve", "report", "ci", "advise", "retrial"]
 STUBS = ["ci"]
 
 
@@ -391,7 +391,97 @@ def test_quick_mock_trial_runs_offline_and_records_the_run(
     assert rows == lines and len(lines) > 0
     events = [parse_event(line) for line in lines]
     assert events[0].type == "run_started" and events[-1].type == "run_ended"
+    assert [e.type for e in events].count("match_ended") == 8
+    assert events[-2].type == "standings"
     assert not (tmp_path / ".court").exists()  # --db wins over the preset's path
+    assert "Leaderboard" in result.output and "95% CI" in result.output
+    assert re.search(r"spotlighting\+guard\+output_filter\s.*\s0%\s.*\s0-66%", result.output)
+
+
+def standings(db: Path) -> list[tuple[Any, ...]]:
+    """Every round's board for the database's only run, or its newest one."""
+    with sqlite3.connect(db) as connection:
+        [(run_id,)] = connection.execute(
+            "SELECT run_id FROM runs ORDER BY created_at DESC LIMIT 1"
+        ).fetchall()
+        return connection.execute(
+            "SELECT round, defense, elo, matches, attack_success, ci_low, ci_high, "
+            "mean_turns_to_break, utility FROM standings WHERE run_id = ? ORDER BY round, defense",
+            (run_id,),
+        ).fetchall()
+
+
+def test_three_mock_shards_merge_into_the_unsharded_board(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "court.yaml").write_text(
+        "target: ollama:llama3.1\nrounds: 2\nscenarios: [vault, refund_tool, system_prompt]\n",
+        encoding="utf-8",
+    )
+    assert invoke("trial", "--mock", "--db", "whole.db").exit_code == 0
+    for part in (1, 2, 3):
+        result = invoke("trial", "--mock", "--shard", f"{part}/3", "--db", f"laptop{part}/c.db")
+        assert result.exit_code == 0, result.output
+        assert f"8 matches (offline, mock, shard {part}/3)" in result.output
+        assert f"Leaderboard for shard {part}/3" in result.output
+        assert "court merge" in result.output
+
+    result = invoke("merge", "laptop2/c.db", "laptop3/c.db", "laptop1/c.db", "--out", "merged.db")
+    assert result.exit_code == 0, result.output
+    assert "Merged 3 runs (shards 1/3, 2/3, 3/3)" in result.output
+    assert standings(tmp_path / "merged.db") == standings(tmp_path / "whole.db")
+    assert len(standings(tmp_path / "whole.db")) == 8  # 4 defenses, 2 rounds
+
+
+def test_merge_says_why_it_cannot_merge(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert invoke("trial", "--mock", "--shard", "1/2", "--db", "one.db").exit_code == 0
+    result = invoke("merge", "one.db", "--out", "merged.db")
+    assert result.exit_code == 2
+    assert "court merge: shard 2/2 is missing; merge them too, or pass --partial" in result.output
+    result = invoke("merge", "one.db", "--out", "merged.db", "--partial")
+    assert result.exit_code == 0, result.output
+    assert "Without shards 2/2, the board is partial." in result.output
+    result = invoke("merge", "nowhere.db", "--out", "merged.db")
+    assert result.exit_code == 2
+    assert "no court database at nowhere.db" in result.output
+    assert invoke("merge", "one.db").exit_code == 2  # --out is required
+
+
+@pytest.mark.parametrize("flag", ["--utility", "--no-utility"])
+def test_a_real_trial_asks_the_dodo_for_utility(
+    flag: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from wonderland_court.engine.mock import MockTarget
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "court.yaml").write_text(
+        "target: ollama:llama3.1\ndefenses: [plain, sandwich]\nscenarios: [vault]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "build_target", lambda spec, client: MockTarget())
+    monkeypatch.setattr(registry, "load_attacker", lambda c, client: registry.ScriptedAttacker())
+    monkeypatch.setattr(registry, "load_judge", lambda c, client: registry.CanaryJudge())
+    result = invoke("trial", flag)
+    assert result.exit_code == 0, result.output
+    with sqlite3.connect(tmp_path / ".court" / "court.db") as connection:
+        scored = connection.execute("SELECT defense, scenario FROM utility_results").fetchall()
+    if flag == "--utility":  # the default
+        assert sorted(scored) == [("plain", "vault"), ("sandwich", "vault")]
+        assert re.search(r"plain\s.*\s0%\s*│\s*$", result.output, re.MULTILINE)
+    else:
+        assert scored == []
+
+
+@pytest.mark.parametrize("shard", ["0/3", "4/3", "two"])
+def test_a_bad_shard_is_a_usage_error(
+    shard: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    result = invoke("trial", "--mock", "--shard", shard)
+    assert result.exit_code == 2
+    assert "should be k/N" in result.output
 
 
 def test_trial_skips_a_stack_with_a_defense_that_is_not_built(
